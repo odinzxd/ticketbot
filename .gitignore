@@ -1,0 +1,15 @@
+node_modules/
+.env
+.env.local
+cases.db
+cases.db-shm
+cases.db-wal
+*.log
+.DS_Store
+dist/
+build/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
