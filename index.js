@@ -9,6 +9,7 @@ const {
   EmbedBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   ModalBuilder,
   PermissionFlagsBits,
   REST,
@@ -337,9 +338,9 @@ function recordCaseEvent(caseNumber, eventType, actor, details) {
 // ---------------------------------------------------------------------------
 function safeReply(interaction, payload) {
   if (interaction.deferred || interaction.replied) {
-    return interaction.followUp({ ...payload, ephemeral: true }).catch(() => null);
+    return interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => null);
   }
-  return interaction.reply({ ...payload, ephemeral: true }).catch(() => null);
+  return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => null);
 }
 
 // ---------------------------------------------------------------------------
@@ -952,14 +953,14 @@ async function postOrUpdateStartPanel(channel) {
 // Kommandohåndterere
 // ---------------------------------------------------------------------------
 async function handleNewCaseCommand(interaction) {
-  await interaction.reply({ content: 'Velg sakstype for å fortsette.', components: [createCaseSelectMenu()], ephemeral: true });
+  await interaction.reply({ content: 'Velg sakstype for å fortsette.', components: [createCaseSelectMenu()], flags: MessageFlags.Ephemeral });
 }
 
 async function handleStartCommand(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan sette opp /start-panelet.' });
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const startChannel = await ensureStartChannel(interaction.guild);
   await postOrUpdateStartPanel(startChannel);
 
@@ -1029,7 +1030,7 @@ async function handleMoveArchiveCommand(interaction) {
   const channel = interaction.guild.channels.cache.get(caseData.channel_id);
   if (!channel) return safeReply(interaction, { content: 'Fant ikke sakskanalen for denne saken.' });
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   await moveCaseToArchive(channel, caseData, interaction.user);
   await interaction.editReply({ content: `Saken ${caseData.case_number} er flyttet til arkiv.` });
 }
@@ -1038,7 +1039,7 @@ async function handleDeleteArchiveCommand(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan slette hele arkivet.' });
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   // 1) Slett kanaler i arkivkategorien (hvis den finnes)
   const archiveCategory = findConfiguredCategory(interaction.guild, 'archive_category', ARCHIVE_CATEGORY_NAME);
@@ -1404,7 +1405,7 @@ async function handleNewCaseModal(interaction) {
   if (!title || !description)
     return safeReply(interaction, { content: 'Alle felter må fylles ut.' });
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   let caseNumber = generateCaseNumber(caseType, interaction.guild);
   while (getCaseByNumberStmt.get(caseNumber)) caseNumber = generateCaseNumber(caseType, interaction.guild);
