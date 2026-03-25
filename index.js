@@ -510,15 +510,24 @@ function hasAnyStaffRole(member) {
   return [DOMMER_ROLE_NAME, SAKSBEHANDLER_ROLE_NAME, ADMIN_ROLE_NAME].some(n => hasRole(member, n));
 }
 
-function isAdmin(member)       { return hasRole(member, ADMIN_ROLE_NAME) || (ADMIN_USER_ID && member?.id === ADMIN_USER_ID); }
+function isConfiguredAdminUser(userId) {
+  return Boolean(ADMIN_USER_ID) && userId === ADMIN_USER_ID;
+}
+
+function isAdmin(member)       {
+  if (ADMIN_USER_ID) return isConfiguredAdminUser(member?.id);
+  return hasRole(member, ADMIN_ROLE_NAME);
+}
 function isJudge(member)       { return hasRole(member, DOMMER_ROLE_NAME); }
 function isCaseHandler(member) { return hasRole(member, SAKSBEHANDLER_ROLE_NAME); }
 
 function hasGuildAdminAccess(interaction) {
+  if (ADMIN_USER_ID) {
+    return isConfiguredAdminUser(interaction.user.id);
+  }
   return isAdmin(interaction.member)
     || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
-    || interaction.guild?.ownerId === interaction.user.id
-    || (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID);
+    || interaction.guild?.ownerId === interaction.user.id;
 }
 
 function getBotSetting(key) {
