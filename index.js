@@ -28,10 +28,12 @@ const {
   DOMMER_ROLE_NAME = 'Dommer',
   SAKSBEHANDLER_ROLE_NAME = 'Saksbehandler',
   ADMIN_ROLE_NAME = 'Admin',
+  ADMIN_USER_ID = '',
   CASE_CATEGORY_NAME = 'Saker',
   ARCHIVE_CATEGORY_NAME = 'Arkiv',
   START_CHANNEL_NAME = 'start-sak',
   COURT_CODE = 'TINGR',
+  BOT_SIGNATURE = 'Med vennlig hilsen Tuva Hansen (Sekretær Oslo Tingrett)',
 } = process.env;
 
 if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
@@ -194,41 +196,8 @@ const COMMANDS = [
     .setName('ny_sak')
     .setDescription('Opprett en ny sak'),
   new SlashCommandBuilder()
-    .setName('sakinfo')
-    .setDescription('Vis informasjon om en sak')
-    .addStringOption(option =>
-      option.setName('saksnummer')
-        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
-        .setRequired(false),
-    ),
-  new SlashCommandBuilder()
-    .setName('minesaker')
-    .setDescription('Vis dine opprettede saker'),
-  new SlashCommandBuilder()
     .setName('flytt_arkiv')
     .setDescription('Flytt en sak til arkivkategori')
-    .addStringOption(option =>
-      option.setName('saksnummer')
-        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
-        .setRequired(false),
-    ),
-  new SlashCommandBuilder()
-    .setName('sakshistorikk')
-    .setDescription('Vis de siste hendelsene for en sak')
-    .addStringOption(option =>
-      option.setName('saksnummer')
-        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
-        .setRequired(false),
-    ),
-  new SlashCommandBuilder()
-    .setName('notat')
-    .setDescription('Legg til et internt notat på en sak (kun staff)')
-    .addStringOption(option =>
-      option.setName('tekst')
-        .setDescription('Selve notatet som skal lagres på saken')
-        .setRequired(true)
-        .setMaxLength(1000),
-    )
     .addStringOption(option =>
       option.setName('saksnummer')
         .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
@@ -288,12 +257,6 @@ const COMMANDS = [
         .setRequired(false),
     ),
   new SlashCommandBuilder()
-    .setName('kommandoer')
-    .setDescription('Vis oversikt over tilgjengelige kommandoer'),
-  new SlashCommandBuilder()
-    .setName('slett_arkiv')
-    .setDescription('Slett hele arkivet (kun admin)'),
-  new SlashCommandBuilder()
     .setName('legg_til_vitne')
     .setDescription('Legg til vitne med navn og forklaring på en sak')
     .addStringOption(option =>
@@ -311,6 +274,23 @@ const COMMANDS = [
     .addStringOption(option =>
       option.setName('saksnummer')
         .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
+        .setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('slett_arkiv')
+    .setDescription('Slett hele arkivet (kun admin)'),
+  new SlashCommandBuilder()
+    .setName('send_melding')
+    .setDescription('Send en melding som botten i en kanal (kun admin)')
+    .addStringOption(option =>
+      option.setName('melding')
+        .setDescription('Meldingen som skal sendes')
+        .setRequired(true)
+        .setMaxLength(1800),
+    )
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Kanalen meldingen skal sendes i (standard: gjeldende kanal)')
         .setRequired(false),
     ),
 ].map(command => command.toJSON());
@@ -530,14 +510,15 @@ function hasAnyStaffRole(member) {
   return [DOMMER_ROLE_NAME, SAKSBEHANDLER_ROLE_NAME, ADMIN_ROLE_NAME].some(n => hasRole(member, n));
 }
 
-function isAdmin(member)       { return hasRole(member, ADMIN_ROLE_NAME); }
+function isAdmin(member)       { return hasRole(member, ADMIN_ROLE_NAME) || (ADMIN_USER_ID && member?.id === ADMIN_USER_ID); }
 function isJudge(member)       { return hasRole(member, DOMMER_ROLE_NAME); }
 function isCaseHandler(member) { return hasRole(member, SAKSBEHANDLER_ROLE_NAME); }
 
 function hasGuildAdminAccess(interaction) {
   return isAdmin(interaction.member)
     || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)
-    || interaction.guild?.ownerId === interaction.user.id;
+    || interaction.guild?.ownerId === interaction.user.id
+    || (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID);
 }
 
 function getBotSetting(key) {
@@ -859,9 +840,25 @@ function buildArchivedCasePermissionOverwrites(guild) {
 }
 
 async function postCaseMessage(channel, caseData) {
+  const docReq = getDocumentationRequirements(caseData.case_type);
+  const extraEmbeds = [];
+  if (docReq) {
+    extraEmbeds.push(
+      new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(`📋 Påkrevd dokumentasjon – ${docReq.title}`)
+        .setDescription(docReq.description)
+        .addFields({
+          name: 'Dokumentasjon som må leveres',
+          value: docReq.docs.map(d => `• ${d}`).join('\n'),
+          inline: false,
+        })
+        .setFooter({ text: 'Sørg for at all dokumentasjon er på plass før videre behandling' }),
+    );
+  }
   await channel.send({
     content: `Sak opprettet for <@${caseData.creator_id}>`,
-    embeds: [buildCaseEmbed(caseData, channel.guild)],
+    embeds: [buildCaseEmbed(caseData, channel.guild), ...extraEmbeds],
     components: buildCaseActionRows(caseData),
   });
 }
@@ -1197,32 +1194,20 @@ async function handleStatusButton(interaction, caseNumber, statusCode) {
 }
 
 
-async function handleCommandsOverview(interaction) {
-  await safeReply(interaction, {
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0x5865f2)
-        .setTitle('Kommandooversikt')
-        .setDescription([
-          '• /start',
-          '• /sett_kanal',
-          '• /ny_sak',
-          '• /sakinfo',
-          '• /minesaker',
-          '• /sett_status',
-          '• /flytt_arkiv',
-          '• /sakshistorikk',
-          '• /notat',
-          '• /gjenapne_sak',
-          '• /legg_til_medlem',
-          '• /fjern_fra_sak',
-          '• /legg_til_vitne',
-          '• /slett_arkiv',
-        ].join('\n'))
-        .setFooter({ text: 'Du kan også bruke knappene direkte i sakskanalen.' })
-        .setTimestamp(),
-    ],
-  });
+async function handleSendMelding(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
+
+  const melding  = interaction.options.getString('melding');
+  const kanal    = interaction.options.getChannel('kanal') || interaction.channel;
+  const fullText = `${melding}\n\n*${BOT_SIGNATURE}*`;
+
+  try {
+    await kanal.send({ content: fullText });
+    await safeReply(interaction, { content: `Melding sendt i ${kanal}.` });
+  } catch (err) {
+    await safeReply(interaction, { content: `Kunne ikke sende melding: ${err.message}` });
+  }
 }
 
 async function handleAddWitnessCommand(interaction) {
@@ -1434,27 +1419,8 @@ async function handleNewCaseModal(interaction) {
     insertCaseStmt.run(caseData);
     recordCaseEvent(caseNumber, 'CREATED', interaction.user, `Saken ble opprettet av ${interaction.user.tag}.`);
     await postCaseMessage(channel, caseData);
-    
-    const docReq = getDocumentationRequirements(caseData.case_type);
-    const embeds = [];
-    if (docReq) {
-      embeds.push(
-        new EmbedBuilder()
-          .setColor(0x9b59b6)
-          .setTitle(`📋 ${docReq.title}`)
-          .setDescription(docReq.description)
-          .addFields({
-            name: 'Påkrevd dokumentasjon',
-            value: docReq.docs.map(d => `• ${d}`).join('\n'),
-            inline: false,
-          })
-          .setFooter({ text: 'Sørg for at all dokumentasjon er på plass før videre behandling' })
-      );
-    }
-    
     await interaction.editReply({
       content: `Sak opprettet: **${caseNumber}** i ${channel}. Du kan legge til vitner med en gang:`,
-      embeds,
       components: [createInitialWitnessRow(caseNumber)],
     });
     logAction('CASE_CREATED', `${caseNumber} opprettet av ${interaction.user.tag} (${interaction.user.id})`);
@@ -1537,18 +1503,14 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'start')         return handleStartCommand(interaction);
       if (interaction.commandName === 'sett_kanal')    return handleSetChannelCommand(interaction);
       if (interaction.commandName === 'ny_sak')        return handleNewCaseCommand(interaction);
-      if (interaction.commandName === 'sakinfo')       return handleCaseInfoCommand(interaction);
-      if (interaction.commandName === 'minesaker')     return handleMyCasesCommand(interaction);
       if (interaction.commandName === 'flytt_arkiv')   return handleMoveArchiveCommand(interaction);
-      if (interaction.commandName === 'sakshistorikk') return handleCaseHistoryCommand(interaction);
-      if (interaction.commandName === 'notat')           return handleNoteCommand(interaction);
       if (interaction.commandName === 'gjenapne_sak')    return handleReopenCaseCommand(interaction);
       if (interaction.commandName === 'legg_til_medlem') return handleAddMember(interaction);
       if (interaction.commandName === 'fjern_fra_sak')   return handleRemoveMember(interaction);
       if (interaction.commandName === 'sett_status')     return handleSetStatusCommand(interaction);
-      if (interaction.commandName === 'kommandoer')      return handleCommandsOverview(interaction);
       if (interaction.commandName === 'legg_til_vitne')  return handleAddWitnessCommand(interaction);
       if (interaction.commandName === 'slett_arkiv')     return handleDeleteArchiveCommand(interaction);
+      if (interaction.commandName === 'send_melding')    return handleSendMelding(interaction);
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'new_case_type_select')
