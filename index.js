@@ -194,6 +194,33 @@ const COMMANDS = [
         .setRequired(true),
     ),
   new SlashCommandBuilder()
+    .setName('sett_sakskategori')
+    .setDescription('Sett kategori for aktive saker (kun admin)')
+    .addChannelOption(option =>
+      option.setName('kategori')
+        .setDescription('Kategorien som skal brukes for aktive saker')
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('sett_arkivkategori')
+    .setDescription('Sett kategori for arkiverte saker (kun admin)')
+    .addChannelOption(option =>
+      option.setName('kategori')
+        .setDescription('Kategorien som skal brukes for arkiverte saker')
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('sett_startkanal')
+    .setDescription('Sett tekstkanal for startpanel (kun admin)')
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Tekstkanalen som skal brukes til startpanel')
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName('ny_sak')
     .setDescription('Opprett en ny sak'),
   new SlashCommandBuilder()
@@ -1025,6 +1052,35 @@ async function handleSetChannelCommand(interaction) {
   await safeReply(interaction, { content: `✅ ${labels[type] || 'Kanal'} er satt til ${channel}.` });
 }
 
+async function handleSetCategoryOnlyCommand(interaction, settingType) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Kun admin kan sette kanaloppsett.' });
+
+  const category = interaction.options.getChannel('kategori', true);
+  if (category.type !== ChannelType.GuildCategory) {
+    return safeReply(interaction, { content: 'Du må velge en kategori.' });
+  }
+
+  setBotSetting(settingType, category.id);
+
+  const label = settingType === 'case_category' ? 'Sakskategori' : 'Arkivkategori';
+  await safeReply(interaction, { content: `✅ ${label} er satt til ${category}.` });
+}
+
+async function handleSetStartChannelOnlyCommand(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Kun admin kan sette kanaloppsett.' });
+
+  const channel = interaction.options.getChannel('kanal', true);
+  if (channel.type !== ChannelType.GuildText) {
+    return safeReply(interaction, { content: 'Du må velge en tekstkanal.' });
+  }
+
+  setBotSetting('start_channel', channel.id);
+  await postOrUpdateStartPanel(channel);
+  await safeReply(interaction, { content: `✅ Startkanal er satt til ${channel}.` });
+}
+
 async function handleCaseInfoCommand(interaction) {
   const caseData = resolveCaseFromInteraction(interaction);
   if (!caseData) return safeReply(interaction, { content: 'Fant ingen sak for forespørselen.' });
@@ -1544,6 +1600,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (interaction.commandName === 'start')         return handleStartCommand(interaction);
       if (interaction.commandName === 'sett_kanal')    return handleSetChannelCommand(interaction);
+      if (interaction.commandName === 'sett_sakskategori') return handleSetCategoryOnlyCommand(interaction, 'case_category');
+      if (interaction.commandName === 'sett_arkivkategori') return handleSetCategoryOnlyCommand(interaction, 'archive_category');
+      if (interaction.commandName === 'sett_startkanal') return handleSetStartChannelOnlyCommand(interaction);
       if (interaction.commandName === 'ny_sak')        return handleNewCaseCommand(interaction);
       if (interaction.commandName === 'flytt_arkiv')   return handleMoveArchiveCommand(interaction);
       if (interaction.commandName === 'gjenapne_sak')    return handleReopenCaseCommand(interaction);
