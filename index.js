@@ -24,7 +24,7 @@ const Database = require('better-sqlite3');
 const {
   DISCORD_TOKEN,
   CLIENT_ID,
-  GUILD_ID,
+  GUILD_ID = '',
   DOMMER_ROLE_NAME = 'Dommer',
   SAKSBEHANDLER_ROLE_NAME = 'Saksbehandler',
   ADMIN_ROLE_NAME = 'Admin',
@@ -36,7 +36,7 @@ const {
   BOT_SIGNATURE = 'Med vennlig hilsen Tuva Hansen (Sekretær Oslo Tingrett)',
 } = process.env;
 
-if (!DISCORD_TOKEN || !CLIENT_ID || !GUILD_ID) {
+if (!DISCORD_TOKEN || !CLIENT_ID) {
   console.error('[BOOT] Mangler nødvendige miljøvariabler. Sjekk .env-filen.');
   process.exit(1);
 }
@@ -593,8 +593,6 @@ function buildCaseEmbed(caseData, guild) {
       { name: 'Prioritet',     value: `${getPriorityEmoji(priority)} ${priority}`,              inline: true },
       { name: 'Opprettet av',  value: `<@${caseData.creator_id}>`,                              inline: true },
       { name: 'Saksbehandler', value: assignedMember ? `<@${assignedMember.id}>` : 'Ikke tildelt', inline: true },
-      { name: 'Klager',        value: truncate(caseData.complainant),                           inline: true },
-      { name: 'Motpart',       value: truncate(caseData.defendant),                             inline: true },
       { name: 'Sakstittel',    value: truncate(caseData.title),                                 inline: false },
       { name: 'Opprettet',     value: formatTimestamp(caseData.created_at),                     inline: true },
       { name: 'Lukket',        value: formatTimestamp(caseData.closed_at),                      inline: true },
@@ -744,19 +742,35 @@ function buildStartPanelEmbed() {
 // ---------------------------------------------------------------------------
 // Kommandoregistrering — med fallback til global registrering
 // ---------------------------------------------------------------------------
-async function registerCommands() {
+async function registerCommands(guildIds = []) {
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-  try {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: COMMANDS });
-    logAction('COMMANDS', `Slash commands registrert mot guild ${GUILD_ID}.`);
-    return { scope: 'guild', guildId: GUILD_ID };
-  } catch (error) {
-    if (error?.code !== 50001) throw error;
-    console.warn(`[REGISTER_COMMANDS_WARNING] Mangler tilgang til guild ${GUILD_ID}. Forsøker global registrering.`);
+  const uniqueGuildIds = [...new Set([
+    ...(GUILD_ID ? [GUILD_ID] : []),
+    ...guildIds,
+  ])];
+
+  let registeredGuildCount = 0;
+
+  for (const guildId of uniqueGuildIds) {
+    try {
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: COMMANDS });
+      registeredGuildCount += 1;
+      logAction('COMMANDS', `Slash commands registrert mot guild ${guildId}.`);
+    } catch (error) {
+      if (error?.code === 50001) {
+        console.warn(`[REGISTER_COMMANDS_WARNING] Mangler tilgang til guild ${guildId}. Hopper over denne guilden.`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (registeredGuildCount === 0) {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: COMMANDS });
     logAction('COMMANDS', 'Slash commands registrert globalt. Det kan ta litt tid før de vises i Discord.');
-    return { scope: 'global' };
   }
+
+  return { scope: registeredGuildCount > 0 ? 'guild' : 'global', guildCount: registeredGuildCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -1506,9 +1520,18 @@ client.once(Events.ClientReady, async readyClient => {
   const guildNames = readyClient.guilds.cache.map(g => `${g.name} (${g.id})`).join(', ') || 'Ingen guilds';
   logAction('GUILDS', `Botten er koblet til: ${guildNames}`);
   try {
-    await registerCommands();
+    const connectedGuildIds = readyClient.guilds.cache.map(g => g.id);
+    await registerCommands(connectedGuildIds);
   } catch (error) {
     console.error('[REGISTER_COMMANDS_ERROR]', error);
+  }
+});
+
+client.on(Events.GuildCreate, async guild => {
+  try {
+    await registerCommands([guild.id]);
+  } catch (error) {
+    console.error('[REGISTER_COMMANDS_ON_GUILD_CREATE_ERROR]', error);
   }
 });
 
