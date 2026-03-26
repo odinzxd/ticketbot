@@ -175,25 +175,6 @@ const COMMANDS = [
     .setName('start')
     .setDescription('Opprett/oppdater en startkanal for nye saker'),
   new SlashCommandBuilder()
-    .setName('sett_kanal')
-    .setDescription('Velg hvilken kanal/kategori botten skal bruke (kun admin)')
-    .addStringOption(option =>
-      option.setName('type')
-        .setDescription('Hvilken destinasjon som skal settes')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Sakskategori', value: 'case_category' },
-          { name: 'Arkivkategori', value: 'archive_category' },
-          { name: 'Startkanal', value: 'start_channel' },
-        ),
-    )
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Kanal/kategori som skal brukes')
-        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
-        .setRequired(true),
-    ),
-  new SlashCommandBuilder()
     .setName('sett_sakskategori')
     .setDescription('Sett kategori for aktive saker (kun admin)')
     .addChannelOption(option =>
@@ -796,6 +777,9 @@ async function registerCommands(guildIds = []) {
   if (registeredGuildCount === 0) {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: COMMANDS });
     logAction('COMMANDS', 'Slash commands registrert globalt. Det kan ta litt tid før de vises i Discord.');
+  } else {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+    logAction('COMMANDS', 'Globale kommandoer tømt for å unngå duplikater mot guild-kommandoer.');
   }
 
   return { scope: registeredGuildCount > 0 ? 'guild' : 'global', guildCount: registeredGuildCount };
@@ -1022,34 +1006,6 @@ async function handleStartCommand(interaction) {
   await postOrUpdateStartPanel(startChannel);
 
   await interaction.editReply({ content: `✅ Startpanel er klart i ${startChannel}.` });
-}
-
-async function handleSetChannelCommand(interaction) {
-  if (!hasGuildAdminAccess(interaction))
-    return safeReply(interaction, { content: 'Kun admin kan sette kanaloppsett.' });
-
-  const type = interaction.options.getString('type', true);
-  const channel = interaction.options.getChannel('kanal', true);
-
-  if ((type === 'case_category' || type === 'archive_category') && channel.type !== ChannelType.GuildCategory)
-    return safeReply(interaction, { content: 'For denne typen må du velge en **kategori**.' });
-
-  if (type === 'start_channel' && channel.type !== ChannelType.GuildText)
-    return safeReply(interaction, { content: 'For startkanal må du velge en **tekstkanal**.' });
-
-  setBotSetting(type, channel.id);
-
-  if (type === 'start_channel') {
-    await postOrUpdateStartPanel(channel);
-  }
-
-  const labels = {
-    case_category: 'Sakskategori',
-    archive_category: 'Arkivkategori',
-    start_channel: 'Startkanal',
-  };
-
-  await safeReply(interaction, { content: `✅ ${labels[type] || 'Kanal'} er satt til ${channel}.` });
 }
 
 async function handleSetCategoryOnlyCommand(interaction, settingType) {
@@ -1599,7 +1555,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return safeReply(interaction, { content: 'Denne kommandoen kan kun brukes i en server.' });
 
       if (interaction.commandName === 'start')         return handleStartCommand(interaction);
-      if (interaction.commandName === 'sett_kanal')    return handleSetChannelCommand(interaction);
       if (interaction.commandName === 'sett_sakskategori') return handleSetCategoryOnlyCommand(interaction, 'case_category');
       if (interaction.commandName === 'sett_arkivkategori') return handleSetCategoryOnlyCommand(interaction, 'archive_category');
       if (interaction.commandName === 'sett_startkanal') return handleSetStartChannelOnlyCommand(interaction);
