@@ -190,6 +190,7 @@ const COMMANDS = [
     .addChannelOption(option =>
       option.setName('kanal')
         .setDescription('Kanal/kategori som skal brukes')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildCategory)
         .setRequired(true),
     ),
   new SlashCommandBuilder()
