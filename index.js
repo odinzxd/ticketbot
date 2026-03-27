@@ -142,6 +142,7 @@ const closeCaseStmt         = db.prepare('UPDATE cases SET status = ?, closed_at
 const archiveCaseStmt       = db.prepare('UPDATE cases SET status = ? WHERE case_number = ?');
 const reopenCaseStmt        = db.prepare('UPDATE cases SET status = ?, closed_at = NULL WHERE case_number = ?');
 const updateStatusStmt      = db.prepare('UPDATE cases SET status = ? WHERE case_number = ?');
+const updatePriorityStmt    = db.prepare('UPDATE cases SET priority = ? WHERE case_number = ?');
 const updateWitnessesStmt   = db.prepare('UPDATE cases SET witnesses = ? WHERE case_number = ?');
 const getArchivedCaseNumbersStmt = db.prepare("SELECT case_number FROM cases WHERE status = 'Arkivert'");
 const deleteEventsByCaseStmt = db.prepare('DELETE FROM case_events WHERE case_number = ?');
@@ -168,6 +169,13 @@ const CASE_TYPES = [
   { label: 'Tvistesak',  value: 'Tvistesak',  description: 'Sivile tvister mellom parter' },
   { label: 'Straffesak', value: 'Straffesak',  description: 'Sak relatert til strafferettslige forhold' },
   { label: 'Voldsskade erstatning', value: 'Voldsskade erstatning', description: 'Erstatningssak for voldsskade' },
+];
+
+const PRIORITY_CHOICES = [
+  { name: 'Lav', value: 'Lav' },
+  { name: 'Medium', value: 'Medium' },
+  { name: 'Høy', value: 'Høy' },
+  { name: 'Kritisk', value: 'Kritisk' },
 ];
 
 const COMMANDS = [
@@ -259,6 +267,20 @@ const COMMANDS = [
           { name: 'Avventer svar', value: 'Avventer svar' },
           { name: 'Lukket', value: 'Lukket' },
         ),
+    )
+    .addStringOption(option =>
+      option.setName('saksnummer')
+        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende kanal.')
+        .setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('sett_prioritet')
+    .setDescription('Sett prioritet på en sak')
+    .addStringOption(option =>
+      option.setName('prioritet')
+        .setDescription('Ny prioritet')
+        .setRequired(true)
+        .addChoices(...PRIORITY_CHOICES),
     )
     .addStringOption(option =>
       option.setName('saksnummer')
@@ -917,6 +939,13 @@ async function refreshCaseMessage(channel, caseData) {
   });
 }
 
+async function syncCaseChannelPresentation(channel, caseData) {
+  const expectedName = buildCaseChannelName(caseData);
+  if (channel.name !== expectedName) {
+    await channel.setName(expectedName, `Oppdatert prioritet for sak ${caseData.case_number}`);
+  }
+}
+
 async function moveCaseToArchive(channel, caseData, actor) {
   const archiveCategory = await ensureCategory(channel.guild, ARCHIVE_CATEGORY_NAME, 'archive_category');
   await channel.setParent(archiveCategory.id, { lockPermissions: false });
@@ -1206,6 +1235,40 @@ async function handleSetStatusCommand(interaction) {
   recordCaseEvent(caseData.case_number, 'STATUS_UPDATED', interaction.user,
     `Status endret til "${newStatus}" av ${interaction.user.tag}.`);
   await safeReply(interaction, { content: `✅ Status oppdatert til ${newStatus}.` });
+}
+
+async function handleSetPriorityCommand(interaction) {
+  const caseData = resolveCaseFromInteraction(interaction);
+  if (!caseData) return safeReply(interaction, { content: 'Fant ingen sak for forespørselen.' });
+
+  const isCreator = interaction.user.id === caseData.creator_id;
+  if (!hasAnyStaffRole(interaction.member) && !isCreator)
+    return safeReply(interaction, { content: 'Kun staff eller sakens oppretter kan endre prioritet.' });
+
+  const newPriority = normalizePriority(interaction.options.getString('prioritet', true));
+  const currentPriority = caseData.priority || 'Medium';
+  if (newPriority === currentPriority)
+    return safeReply(interaction, { content: `Saken har allerede prioritet ${newPriority}.` });
+
+  updatePriorityStmt.run(newPriority, caseData.case_number);
+  const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
+
+  const channel = getCaseChannel(interaction.guild, updatedCase);
+  if (channel) {
+    await syncCaseChannelPresentation(channel, updatedCase);
+    await refreshCaseMessage(channel, updatedCase);
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle('Prioritet oppdatert')
+        .setDescription(`Saken ${caseData.case_number} har ny prioritet: **${newPriority}**.`)
+        .setTimestamp()],
+    });
+  }
+
+  recordCaseEvent(caseData.case_number, 'PRIORITY_UPDATED', interaction.user,
+    `Prioritet endret fra "${currentPriority}" til "${newPriority}" av ${interaction.user.tag}.`);
+  await safeReply(interaction, { content: `✅ Prioritet oppdatert til ${newPriority}.` });
 }
 
 function resolveStatusFromButtonCode(statusCode) {
@@ -1564,6 +1627,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'legg_til_medlem') return handleAddMember(interaction);
       if (interaction.commandName === 'fjern_fra_sak')   return handleRemoveMember(interaction);
       if (interaction.commandName === 'sett_status')     return handleSetStatusCommand(interaction);
+      if (interaction.commandName === 'sett_prioritet')  return handleSetPriorityCommand(interaction);
       if (interaction.commandName === 'legg_til_vitne')  return handleAddWitnessCommand(interaction);
       if (interaction.commandName === 'slett_arkiv')     return handleDeleteArchiveCommand(interaction);
       if (interaction.commandName === 'send_melding')    return handleSendMelding(interaction);
