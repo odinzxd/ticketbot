@@ -190,6 +190,12 @@ const CASE_TYPES = [
   { label: 'Voldsskade erstatning', value: 'Voldsskade erstatning', description: 'Erstatningssak for voldsskade' },
 ];
 
+const CASE_TYPE_CHOICES = [
+  { name: 'Tvistesak', value: 'Tvistesak' },
+  { name: 'Straffesak', value: 'Straffesak' },
+  { name: 'Voldsskade erstatning', value: 'Voldsskade erstatning' },
+];
+
 const PRIORITY_CHOICES = [
   { name: 'Lav', value: 'Lav' },
   { name: 'Medium', value: 'Medium' },
@@ -231,6 +237,49 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('ny_sak')
     .setDescription('Opprett en ny sak'),
+  new SlashCommandBuilder()
+    .setName('konverter_ticket')
+    .setDescription('Konverter en eksisterende ticket-kanal til en sak (beholder kanaltilganger)')
+    .addStringOption(option =>
+      option.setName('sakstype')
+        .setDescription('Sakstype for den konverterte saken')
+        .setRequired(true)
+        .addChoices(...CASE_TYPE_CHOICES),
+    )
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Kanalen som skal konverteres (standard: gjeldende kanal)')
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(false),
+    )
+    .addStringOption(option =>
+      option.setName('saksnummer')
+        .setDescription('Valgfritt saksnummer. Lar du den stå tom genereres et nytt.')
+        .setRequired(false),
+    )
+    .addStringOption(option =>
+      option.setName('tittel')
+        .setDescription('Valgfri tittel på saken')
+        .setRequired(false)
+        .setMaxLength(100),
+    )
+    .addStringOption(option =>
+      option.setName('beskrivelse')
+        .setDescription('Valgfri beskrivelse av saken')
+        .setRequired(false)
+        .setMaxLength(1000),
+    )
+    .addStringOption(option =>
+      option.setName('prioritet')
+        .setDescription('Valgfri prioritet')
+        .setRequired(false)
+        .addChoices(...PRIORITY_CHOICES),
+    )
+    .addUserOption(option =>
+      option.setName('oppretter')
+        .setDescription('Valgfri bruker som skal stå som oppretter')
+        .setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName('flytt_arkiv')
     .setDescription('Flytt en sak til arkivkategori')
@@ -1162,6 +1211,79 @@ async function handleNewCaseCommand(interaction) {
   await interaction.reply({ content: 'Velg sakstype for å fortsette.', components: [createCaseSelectMenu()], flags: MessageFlags.Ephemeral });
 }
 
+async function handleConvertTicketCommand(interaction) {
+  if (!hasAnyStaffRole(interaction.member))
+    return safeReply(interaction, { content: 'Kun staff kan konvertere ticket-kanaler til saker.' });
+
+  const channel = interaction.options.getChannel('kanal') || interaction.channel;
+  if (!channel || channel.type !== ChannelType.GuildText)
+    return safeReply(interaction, { content: 'Du må velge en tekstkanal.' });
+
+  const existingCase = getCaseByChannelStmt.get(channel.id);
+  if (existingCase) {
+    return safeReply(interaction, {
+      content: `Kanalen er allerede knyttet til saken ${existingCase.case_number}. Ingen endringer gjort.`,
+    });
+  }
+
+  const caseType = interaction.options.getString('sakstype', true);
+  const creator = interaction.options.getUser('oppretter') || interaction.user;
+  const priority = normalizePriority(interaction.options.getString('prioritet'));
+  const title = (interaction.options.getString('tittel') || `Migrert fra ${channel.name}`).trim();
+  const description = (interaction.options.getString('beskrivelse')
+    || `Ticket-kanalen ${channel.name} ble konvertert til sak av ${interaction.user.tag}.`).trim();
+
+  let caseNumber = normalizeCaseNumber(interaction.options.getString('saksnummer'));
+  if (caseNumber) {
+    if (getCaseByNumberStmt.get(caseNumber)) {
+      return safeReply(interaction, { content: `Saksnummer ${caseNumber} finnes allerede. Velg et annet.` });
+    }
+  } else {
+    caseNumber = generateCaseNumber(caseType, interaction.guild);
+    while (getCaseByNumberStmt.get(caseNumber)) caseNumber = generateCaseNumber(caseType, interaction.guild);
+  }
+
+  const caseData = {
+    case_number: caseNumber,
+    creator_id: creator.id,
+    assigned_to: null,
+    priority,
+    witnesses: '[]',
+    case_type: caseType,
+    title,
+    description,
+    complainant: 'Ikke oppgitt',
+    defendant: 'Ikke oppgitt',
+    status: 'Åpen',
+    created_at: new Date().toISOString(),
+    closed_at: null,
+    channel_id: channel.id,
+  };
+
+  try {
+    insertCaseStmt.run(caseData);
+    await syncCaseChannelPresentation(channel, caseData);
+
+    const previousTopic = channel.topic ? ` | Tidligere topic: ${truncate(channel.topic, 180)}` : '';
+    await channel.setTopic(
+      `Sak ${caseData.case_number} • ${caseData.case_type} • Opprettet av ${caseData.creator_id}${previousTopic}`,
+      `Konvertert fra ticket av ${interaction.user.tag}`,
+    ).catch(() => null);
+
+    await postCaseMessage(channel, caseData);
+    recordCaseEvent(caseData.case_number, 'CONVERTED_FROM_TICKET', interaction.user,
+      `Ticket-kanal ${channel.id} ble konvertert til sak ${caseData.case_number}.`);
+    logAction('CASE_CONVERTED', `${caseData.case_number} konvertert fra ticket-kanal ${channel.id} av ${interaction.user.tag}`);
+
+    return safeReply(interaction, {
+      content: `✅ Kanal ${channel} er konvertert til sak ${caseData.case_number}. Kanaltilganger er beholdt.`,
+    });
+  } catch (error) {
+    console.error('[CONVERT_TICKET_ERROR]', error);
+    return safeReply(interaction, { content: `Kunne ikke konvertere kanalen: ${error.message || 'Ukjent feil.'}` });
+  }
+}
+
 async function handleStartCommand(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan sette opp /start-panelet.' });
@@ -1761,6 +1883,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'sett_arkivkategori') return handleSetCategoryOnlyCommand(interaction, 'archive_category');
       if (interaction.commandName === 'sett_startkanal') return handleSetStartChannelOnlyCommand(interaction);
       if (interaction.commandName === 'ny_sak')        return handleNewCaseCommand(interaction);
+      if (interaction.commandName === 'konverter_ticket') return handleConvertTicketCommand(interaction);
       if (interaction.commandName === 'flytt_arkiv')   return handleMoveArchiveCommand(interaction);
       if (interaction.commandName === 'gjenapne_sak')    return handleReopenCaseCommand(interaction);
       if (interaction.commandName === 'legg_til_medlem') return handleAddMember(interaction);
