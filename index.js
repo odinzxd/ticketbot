@@ -188,12 +188,14 @@ const CASE_TYPES = [
   { label: 'Tvistesak',  value: 'Tvistesak',  description: 'Sivile tvister mellom parter' },
   { label: 'Straffesak', value: 'Straffesak',  description: 'Sak relatert til strafferettslige forhold' },
   { label: 'Voldsskade erstatning', value: 'Voldsskade erstatning', description: 'Erstatningssak for voldsskade' },
+  { label: 'Annet', value: 'Annet', description: 'Ingen forhåndsdefinerte dokumentasjonskrav' },
 ];
 
 const CASE_TYPE_CHOICES = [
   { name: 'Tvistesak', value: 'Tvistesak' },
   { name: 'Straffesak', value: 'Straffesak' },
   { name: 'Voldsskade erstatning', value: 'Voldsskade erstatning' },
+  { name: 'Annet', value: 'Annet' },
 ];
 
 const PRIORITY_CHOICES = [
@@ -544,7 +546,7 @@ function getCourtCode(guild) {
 }
 
 function getCaseTypeCode(caseType) {
-  const map = { Tvistesak: 'TVI', Straffesak: 'STR', 'Voldsskade erstatning': 'VOL' };
+  const map = { Tvistesak: 'TVI', Straffesak: 'STR', 'Voldsskade erstatning': 'VOL', Annet: 'ANT' };
   return map[caseType] || 'GEN';
 }
 
