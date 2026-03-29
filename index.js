@@ -129,6 +129,16 @@ const insertCaseStmt = db.prepare(`
   )
 `);
 
+const insertRecoveredCaseStmt = db.prepare(`
+  INSERT OR IGNORE INTO cases (
+    case_number, creator_id, assigned_to, priority, witnesses, case_type, title, description,
+    complainant, defendant, status, created_at, closed_at, channel_id
+  ) VALUES (
+    @case_number, @creator_id, @assigned_to, @priority, @witnesses, @case_type, @title, @description,
+    @complainant, @defendant, @status, @created_at, @closed_at, @channel_id
+  )
+`);
+
 const getCaseByChannelStmt  = db.prepare('SELECT * FROM cases WHERE channel_id = ?');
 const getCaseByNumberStmt   = db.prepare('SELECT * FROM cases WHERE case_number = ?');
 const getCasesByCreatorStmt = db.prepare(`
@@ -616,6 +626,69 @@ function extractCaseNumberFromLegacyMessage(interaction) {
   return '';
 }
 
+function extractCreatorIdFromLegacyContext(interaction) {
+  const fromMessage = String(interaction.message?.content || '').match(/<@(\d+)>/);
+  if (fromMessage?.[1]) return fromMessage[1];
+
+  const fromTopic = String(interaction.channel?.topic || '').match(/Opprettet av\s+(\d+)/i);
+  if (fromTopic?.[1]) return fromTopic[1];
+
+  return interaction.user.id;
+}
+
+function extractCaseTypeFromLegacyContext(interaction, caseNumber) {
+  const embedTypeField = interaction.message?.embeds
+    ?.flatMap(embed => embed?.fields || [])
+    ?.find(field => String(field?.name || '').toLowerCase() === 'type');
+
+  const fromField = String(embedTypeField?.value || '').trim();
+  if (fromField) return fromField;
+
+  const match = String(caseNumber || '').toUpperCase().match(/^\d{2}-\d{6}([A-Z]{3})-/);
+  const code = match?.[1] || '';
+  if (code === 'TVI') return 'Tvistesak';
+  if (code === 'STR') return 'Straffesak';
+  if (code === 'VOL') return 'Voldsskade erstatning';
+  return 'Ukjent';
+}
+
+function recoverLegacyCaseFromInteraction(interaction, caseNumber) {
+  const normalizedCaseNumber = normalizeCaseNumber(caseNumber);
+  if (!normalizedCaseNumber) return null;
+
+  const creatorId = extractCreatorIdFromLegacyContext(interaction);
+  const caseType = extractCaseTypeFromLegacyContext(interaction, normalizedCaseNumber);
+
+  const recoveredCase = {
+    case_number: normalizedCaseNumber,
+    creator_id: creatorId,
+    assigned_to: null,
+    priority: 'Medium',
+    witnesses: '[]',
+    case_type: caseType,
+    title: `Gjenopprettet sak ${normalizedCaseNumber}`,
+    description: 'Sak gjenopprettet automatisk fra legacy knappedata.',
+    complainant: 'Ikke oppgitt',
+    defendant: 'Ikke oppgitt',
+    status: 'Åpen',
+    created_at: new Date().toISOString(),
+    closed_at: null,
+    channel_id: interaction.channelId,
+  };
+
+  insertRecoveredCaseStmt.run(recoveredCase);
+  const persisted = getCaseByNumberStmt.get(normalizedCaseNumber);
+  if (persisted) {
+    if (persisted.channel_id !== interaction.channelId) {
+      updateCaseChannelStmt.run(interaction.channelId, persisted.case_number);
+    }
+    logAction('CASE_RECOVERED', `${persisted.case_number} ble gjenopprettet fra legacy-data i kanal ${interaction.channelId}`);
+    return getCaseByNumberStmt.get(persisted.case_number);
+  }
+
+  return null;
+}
+
 function resolveCaseFromButtonInteraction(interaction, caseNumber) {
   const normalizedCaseNumber = normalizeCaseNumber(caseNumber);
   const caseByNumber = getCaseByNumberStmt.get(normalizedCaseNumber);
@@ -641,6 +714,9 @@ function resolveCaseFromButtonInteraction(interaction, caseNumber) {
       }
       return getCaseByNumberStmt.get(caseByLegacyData.case_number);
     }
+
+    const recoveredCase = recoverLegacyCaseFromInteraction(interaction, legacyCaseNumber);
+    if (recoveredCase) return recoveredCase;
   }
 
   logAction(
