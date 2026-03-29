@@ -1596,14 +1596,23 @@ async function handleStatusButton(interaction, caseNumber, statusCode) {
   const newStatus = resolveStatusFromButtonCode(statusCode);
   if (!newStatus) return safeReply(interaction, { content: 'Ugyldig statusknapp.' });
 
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   updateStatusStmt.run(newStatus, caseData.case_number);
   const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
-  await refreshCaseMessage(interaction.channel, updatedCase);
+  try {
+    await refreshCaseMessage(interaction.channel, updatedCase);
+  } catch (error) {
+    logAction(
+      'STATUS_REFRESH_SKIPPED',
+      `${caseData.case_number} kunne ikke oppdatere saksmelding (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+    );
+  }
 
   recordCaseEvent(caseData.case_number, 'STATUS_UPDATED', interaction.user,
     `Status endret til "${newStatus}" av ${interaction.user.tag} via knapp.`);
 
-  await safeReply(interaction, { content: `✅ Status oppdatert til ${newStatus}.` });
+  await interaction.editReply({ content: `✅ Status oppdatert til ${newStatus}.` });
 }
 
 
