@@ -174,6 +174,9 @@ const insertCaseEventStmt = db.prepare(`
 const getCaseEventsStmt = db.prepare(
   'SELECT * FROM case_events WHERE case_number = ? ORDER BY created_at DESC, id DESC LIMIT ?',
 );
+const hasConvertedFromTicketEventStmt = db.prepare(
+  "SELECT 1 AS found FROM case_events WHERE case_number = ? AND event_type = 'CONVERTED_FROM_TICKET' LIMIT 1",
+);
 const getBotSettingStmt = db.prepare('SELECT value FROM bot_settings WHERE key = ?');
 const upsertBotSettingStmt = db.prepare(`
   INSERT INTO bot_settings (key, value)
@@ -1086,7 +1089,7 @@ function buildActiveCasePermissionOverwrites(guild, creatorId) {
 }
 
 function buildArchivedCasePermissionOverwrites(guild) {
-  const { dommer } = getConfiguredRoles(guild);
+  const { dommer, admin } = getConfiguredRoles(guild);
 
   const permissionOverwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -1103,7 +1106,23 @@ function buildArchivedCasePermissionOverwrites(guild) {
     });
   }
 
+  if (admin) {
+    permissionOverwrites.push({
+      id: admin.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+      ],
+    });
+  }
+
   return permissionOverwrites;
+}
+
+function isConvertedFromTicketCase(caseNumber) {
+  return Boolean(hasConvertedFromTicketEventStmt.get(caseNumber)?.found);
 }
 
 async function postCaseMessage(channel, caseData) {
@@ -1144,13 +1163,28 @@ async function refreshCaseMessage(channel, caseData) {
 async function syncCaseChannelPresentation(channel, caseData) {
   const expectedName = buildCaseChannelName(caseData);
   if (channel.name !== expectedName) {
-    await channel.setName(expectedName, `Oppdatert prioritet for sak ${caseData.case_number}`);
+    try {
+      await channel.setName(expectedName, `Oppdatert prioritet for sak ${caseData.case_number}`);
+    } catch (error) {
+      logAction(
+        'CHANNEL_RENAME_SKIPPED',
+        `${caseData.case_number} kunne ikke oppdatere kanalnavn (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+      );
+    }
   }
 }
 
 async function moveCaseToArchive(channel, caseData, actor) {
   const archiveCategory = await ensureCategory(channel.guild, ARCHIVE_CATEGORY_NAME, 'archive_category');
   await channel.setParent(archiveCategory.id, { lockPermissions: false });
+
+  if (isConvertedFromTicketCase(caseData.case_number)) {
+    await channel.permissionOverwrites.set(
+      buildArchivedCasePermissionOverwrites(channel.guild),
+      `Arkivert konvertert ticket ${caseData.case_number}: kun dommer/admin beholder tilgang`,
+    );
+  }
+
   archiveCaseStmt.run('Arkivert', caseData.case_number);
 
   const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
