@@ -423,7 +423,10 @@ function recordCaseEvent(caseNumber, eventType, actor, details) {
 // Hjelpefunksjoner — svar
 // ---------------------------------------------------------------------------
 function safeReply(interaction, payload) {
-  if (interaction.deferred || interaction.replied) {
+  if (interaction.deferred && !interaction.replied) {
+    return interaction.editReply(payload).catch(() => null);
+  }
+  if (interaction.replied) {
     return interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => null);
   }
   return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(() => null);
