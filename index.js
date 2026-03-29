@@ -188,6 +188,7 @@ const CASE_TYPES = [
   { label: 'Tvistesak',  value: 'Tvistesak',  description: 'Sivile tvister mellom parter' },
   { label: 'Straffesak', value: 'Straffesak',  description: 'Sak relatert til strafferettslige forhold' },
   { label: 'Voldsskade erstatning', value: 'Voldsskade erstatning', description: 'Erstatningssak for voldsskade' },
+  { label: 'Ransakelseordre', value: 'Ransakelseordre', description: 'Sak knyttet til ransakelseordre' },
   { label: 'Annet', value: 'Annet', description: 'Ingen forhåndsdefinerte dokumentasjonskrav' },
 ];
 
@@ -195,6 +196,7 @@ const CASE_TYPE_CHOICES = [
   { name: 'Tvistesak', value: 'Tvistesak' },
   { name: 'Straffesak', value: 'Straffesak' },
   { name: 'Voldsskade erstatning', value: 'Voldsskade erstatning' },
+  { name: 'Ransakelseordre', value: 'Ransakelseordre' },
   { name: 'Annet', value: 'Annet' },
 ];
 
@@ -546,7 +548,13 @@ function getCourtCode(guild) {
 }
 
 function getCaseTypeCode(caseType) {
-  const map = { Tvistesak: 'TVI', Straffesak: 'STR', 'Voldsskade erstatning': 'VOL', Annet: 'ANT' };
+  const map = {
+    Tvistesak: 'TVI',
+    Straffesak: 'STR',
+    'Voldsskade erstatning': 'VOL',
+    Ransakelseordre: 'RAN',
+    Annet: 'ANT',
+  };
   return map[caseType] || 'GEN';
 }
 
@@ -701,6 +709,7 @@ function extractCaseTypeFromLegacyContext(interaction, caseNumber) {
   if (code === 'TVI') return 'Tvistesak';
   if (code === 'STR') return 'Straffesak';
   if (code === 'VOL') return 'Voldsskade erstatning';
+  if (code === 'RAN') return 'Ransakelseordre';
   return 'Ukjent';
 }
 
@@ -1544,7 +1553,7 @@ async function handleStatusButton(interaction, caseNumber, statusCode) {
   if (!hasAnyStaffRole(interaction.member))
     return safeReply(interaction, { content: 'Du har ikke tilgang til å endre status.' });
 
-  const caseData = getCaseByNumberStmt.get(caseNumber);
+  const caseData = resolveCaseFromButtonInteraction(interaction, caseNumber);
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
 
   if (!canManageCase(interaction.member, caseData) && !isCaseHandler(interaction.member))
