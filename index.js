@@ -1704,20 +1704,20 @@ async function handleCloseCase(interaction, caseNumber) {
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
   if (!canManageCase(interaction.member, caseData)) return safeReply(interaction, { content: 'Du har ikke tilgang til å lukke denne saken.' });
   if (caseData.status === 'Lukket') return safeReply(interaction, { content: 'Saken er allerede lukket.' });
+  if (caseData.status === 'Arkivert') return safeReply(interaction, { content: 'Saken er allerede arkivert.' });
 
   const closedAt = new Date().toISOString();
   closeCaseStmt.run('Lukket', closedAt, caseData.case_number);
-  const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
-  await refreshCaseMessage(interaction.channel, updatedCase);
   recordCaseEvent(caseData.case_number, 'CLOSED', interaction.user, `Saken ble lukket av ${interaction.user.tag}.`);
+  await moveCaseToArchive(interaction.channel, getCaseByNumberStmt.get(caseData.case_number), interaction.user);
 
   await interaction.reply({
-    embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle('Sak lukket')
-      .setDescription(`Saken ${caseData.case_number} er lukket av <@${interaction.user.id}>.`)
+    embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle('Sak lukket og arkivert')
+      .setDescription(`Saken ${caseData.case_number} er lukket av <@${interaction.user.id}> og flyttet til arkiv.`)
       .addFields({ name: 'Lukket tidspunkt', value: formatTimestamp(closedAt) })
       .setTimestamp()],
   });
-  logAction('CASE_CLOSED', `${caseData.case_number} lukket av ${interaction.user.tag}`);
+  logAction('CASE_CLOSED', `${caseData.case_number} lukket og arkivert av ${interaction.user.tag}`);
 }
 
 async function handleArchiveCase(interaction, caseNumber) {
