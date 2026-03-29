@@ -1599,7 +1599,7 @@ async function handleStatusButton(interaction, caseNumber, statusCode) {
   const newStatus = resolveStatusFromButtonCode(statusCode);
   if (!newStatus) return safeReply(interaction, { content: 'Ugyldig statusknapp.' });
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await interaction.reply({ content: '⏳ Oppdaterer status ...', flags: MessageFlags.Ephemeral });
 
   try {
     updateStatusStmt.run(newStatus, caseData.case_number);
