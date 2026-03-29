@@ -1089,10 +1089,6 @@ async function syncCaseChannelPresentation(channel, caseData) {
 async function moveCaseToArchive(channel, caseData, actor) {
   const archiveCategory = await ensureCategory(channel.guild, ARCHIVE_CATEGORY_NAME, 'archive_category');
   await channel.setParent(archiveCategory.id, { lockPermissions: false });
-  await channel.permissionOverwrites.set(
-    buildArchivedCasePermissionOverwrites(channel.guild),
-    `Arkivert sak ${caseData.case_number}: kun dommerrolle beholder tilgang`,
-  );
   archiveCaseStmt.run('Arkivert', caseData.case_number);
 
   const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
