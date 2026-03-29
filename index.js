@@ -152,6 +152,7 @@ const reopenCaseStmt        = db.prepare('UPDATE cases SET status = ?, closed_at
 const updateStatusStmt      = db.prepare('UPDATE cases SET status = ? WHERE case_number = ?');
 const updatePriorityStmt    = db.prepare('UPDATE cases SET priority = ? WHERE case_number = ?');
 const updateWitnessesStmt   = db.prepare('UPDATE cases SET witnesses = ? WHERE case_number = ?');
+const updateCaseChannelStmt = db.prepare('UPDATE cases SET channel_id = ? WHERE case_number = ?');
 const getArchivedCaseNumbersStmt = db.prepare("SELECT case_number FROM cases WHERE status = 'Arkivert'");
 const deleteEventsByCaseStmt = db.prepare('DELETE FROM case_events WHERE case_number = ?');
 const deleteArchivedCasesStmt = db.prepare("DELETE FROM cases WHERE status = 'Arkivert'");
@@ -598,13 +599,49 @@ function resolveCaseFromInteraction(interaction) {
     : getCaseByChannelStmt.get(interaction.channelId);
 }
 
+function extractCaseNumberFromLegacyMessage(interaction) {
+  const embeds = interaction.message?.embeds || [];
+  for (const embed of embeds) {
+    const titleMatch = String(embed?.title || '').match(/Saksmappe\s*•\s*(.+)$/i);
+    if (titleMatch?.[1]) return normalizeCaseNumber(titleMatch[1]);
+
+    const fields = embed?.fields || [];
+    const caseField = fields.find(field => String(field?.name || '').toLowerCase() === 'saksnummer');
+    if (caseField?.value) return normalizeCaseNumber(caseField.value);
+  }
+
+  const topicMatch = String(interaction.channel?.topic || '').match(/Sak\s+([A-Z0-9\-]+)/i);
+  if (topicMatch?.[1]) return normalizeCaseNumber(topicMatch[1]);
+
+  return '';
+}
+
 function resolveCaseFromButtonInteraction(interaction, caseNumber) {
   const normalizedCaseNumber = normalizeCaseNumber(caseNumber);
   const caseByNumber = getCaseByNumberStmt.get(normalizedCaseNumber);
-  if (caseByNumber) return caseByNumber;
+  if (caseByNumber) {
+    if (caseByNumber.channel_id !== interaction.channelId) {
+      updateCaseChannelStmt.run(interaction.channelId, caseByNumber.case_number);
+      logAction('CASE_CHANNEL_REPAIRED', `${caseByNumber.case_number} kanal oppdatert til ${interaction.channelId}`);
+      return getCaseByNumberStmt.get(caseByNumber.case_number);
+    }
+    return caseByNumber;
+  }
 
   const caseByChannel = getCaseByChannelStmt.get(interaction.channelId);
   if (caseByChannel) return caseByChannel;
+
+  const legacyCaseNumber = extractCaseNumberFromLegacyMessage(interaction);
+  if (legacyCaseNumber) {
+    const caseByLegacyData = getCaseByNumberStmt.get(legacyCaseNumber);
+    if (caseByLegacyData) {
+      if (caseByLegacyData.channel_id !== interaction.channelId) {
+        updateCaseChannelStmt.run(interaction.channelId, caseByLegacyData.case_number);
+        logAction('CASE_CHANNEL_REPAIRED', `${caseByLegacyData.case_number} kanal oppdatert via legacy-oppslag til ${interaction.channelId}`);
+      }
+      return getCaseByNumberStmt.get(caseByLegacyData.case_number);
+    }
+  }
 
   logAction(
     'CASE_LOOKUP_MISS',
