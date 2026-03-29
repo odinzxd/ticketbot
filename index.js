@@ -566,7 +566,8 @@ function getCaseChannelSuffix(caseNumber) {
     .slice(0, 90);
 }
 
-function getPriorityChannelEmoji(priority) {
+function getPriorityChannelEmoji(priority, status) {
+  if (status === 'Avventer svar') return '🔴';
   if (priority === 'Kritisk' || priority === 'Høy') return '🔴';
   if (priority === 'Lav') return '🟢';
   return '🟡';
@@ -583,7 +584,7 @@ function getShortCaseReference(caseNumber) {
 }
 
 function buildCaseChannelName(caseData) {
-  const emoji = getPriorityChannelEmoji(caseData.priority || 'Medium');
+  const emoji = getPriorityChannelEmoji(caseData.priority || 'Medium', caseData.status);
   const shortRef = getShortCaseReference(caseData.case_number);
   return `${emoji}-sak-${shortRef}`;
 }
@@ -1121,6 +1122,7 @@ async function postCaseMessage(channel, caseData) {
 }
 
 async function refreshCaseMessage(channel, caseData) {
+  await syncCaseChannelPresentation(channel, caseData);
   const messages = await channel.messages.fetch({ limit: 20 });
   const target   = messages.find(m => m.author.id === client.user.id && m.components.length > 0);
   if (!target) return;
