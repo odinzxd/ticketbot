@@ -579,11 +579,20 @@ function canManageCase(member, caseData) {
 // ---------------------------------------------------------------------------
 // Hjelpefunksjoner — sak-oppslag
 // ---------------------------------------------------------------------------
+function normalizeCaseNumber(caseNumber) {
+  return String(caseNumber || '').trim().toUpperCase();
+}
+
 function resolveCaseFromInteraction(interaction) {
-  const num = interaction.options?.getString('saksnummer');
+  const num = normalizeCaseNumber(interaction.options?.getString('saksnummer'));
   return num
-    ? getCaseByNumberStmt.get(num.trim().toUpperCase())
+    ? getCaseByNumberStmt.get(num)
     : getCaseByChannelStmt.get(interaction.channelId);
+}
+
+function resolveCaseFromButtonInteraction(interaction, caseNumber) {
+  const normalizedCaseNumber = normalizeCaseNumber(caseNumber);
+  return getCaseByNumberStmt.get(normalizedCaseNumber) || getCaseByChannelStmt.get(interaction.channelId);
 }
 
 function getCaseChannel(guild, caseData) {
@@ -1542,50 +1551,50 @@ async function handleTakeCase(interaction, caseNumber) {
   if (!hasAnyStaffRole(interaction.member))
     return safeReply(interaction, { content: 'Du har ikke tilgang til å ta saker.' });
 
-  const caseData = getCaseByNumberStmt.get(caseNumber);
+  const caseData = resolveCaseFromButtonInteraction(interaction, caseNumber);
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
   if (caseData.status === 'Lukket' || caseData.status === 'Arkivert')
     return safeReply(interaction, { content: 'Saken kan ikke tas fordi den er lukket eller arkivert.' });
 
-  updateAssignedStmt.run(interaction.user.id, 'Under behandling', caseNumber);
-  const updatedCase = getCaseByNumberStmt.get(caseNumber);
+  updateAssignedStmt.run(interaction.user.id, 'Under behandling', caseData.case_number);
+  const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
   await refreshCaseMessage(interaction.channel, updatedCase);
-  recordCaseEvent(caseNumber, 'ASSIGNED', interaction.user, `Saken ble tildelt ${interaction.user.tag} og satt til Under behandling.`);
+  recordCaseEvent(caseData.case_number, 'ASSIGNED', interaction.user, `Saken ble tildelt ${interaction.user.tag} og satt til Under behandling.`);
 
   await interaction.reply({
     embeds: [new EmbedBuilder().setColor(0xf1c40f).setTitle('Sak tildelt')
-      .setDescription(`Saken ${caseNumber} er nå tildelt <@${interaction.user.id}> og satt til **Under behandling**.`).setTimestamp()],
+      .setDescription(`Saken ${caseData.case_number} er nå tildelt <@${interaction.user.id}> og satt til **Under behandling**.`).setTimestamp()],
   });
-  logAction('CASE_ASSIGNED', `${caseNumber} tildelt til ${interaction.user.tag}`);
+  logAction('CASE_ASSIGNED', `${caseData.case_number} tildelt til ${interaction.user.tag}`);
 }
 
 async function handleCloseCase(interaction, caseNumber) {
-  const caseData = getCaseByNumberStmt.get(caseNumber);
+  const caseData = resolveCaseFromButtonInteraction(interaction, caseNumber);
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
   if (!canManageCase(interaction.member, caseData)) return safeReply(interaction, { content: 'Du har ikke tilgang til å lukke denne saken.' });
   if (caseData.status === 'Lukket') return safeReply(interaction, { content: 'Saken er allerede lukket.' });
 
   const closedAt = new Date().toISOString();
-  closeCaseStmt.run('Lukket', closedAt, caseNumber);
-  const updatedCase = getCaseByNumberStmt.get(caseNumber);
+  closeCaseStmt.run('Lukket', closedAt, caseData.case_number);
+  const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
   await refreshCaseMessage(interaction.channel, updatedCase);
-  recordCaseEvent(caseNumber, 'CLOSED', interaction.user, `Saken ble lukket av ${interaction.user.tag}.`);
+  recordCaseEvent(caseData.case_number, 'CLOSED', interaction.user, `Saken ble lukket av ${interaction.user.tag}.`);
 
   await interaction.reply({
     embeds: [new EmbedBuilder().setColor(0xe74c3c).setTitle('Sak lukket')
-      .setDescription(`Saken ${caseNumber} er lukket av <@${interaction.user.id}>.`)
+      .setDescription(`Saken ${caseData.case_number} er lukket av <@${interaction.user.id}>.`)
       .addFields({ name: 'Lukket tidspunkt', value: formatTimestamp(closedAt) })
       .setTimestamp()],
   });
-  logAction('CASE_CLOSED', `${caseNumber} lukket av ${interaction.user.tag}`);
+  logAction('CASE_CLOSED', `${caseData.case_number} lukket av ${interaction.user.tag}`);
 }
 
 async function handleArchiveCase(interaction, caseNumber) {
-  const caseData = getCaseByNumberStmt.get(caseNumber);
+  const caseData = resolveCaseFromButtonInteraction(interaction, caseNumber);
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
   if (!canManageCase(interaction.member, caseData)) return safeReply(interaction, { content: 'Du har ikke tilgang til å arkivere denne saken.' });
   await moveCaseToArchive(interaction.channel, caseData, interaction.user);
-  await interaction.reply({ content: `Saken ${caseNumber} er arkivert.` });
+  await interaction.reply({ content: `Saken ${caseData.case_number} er arkivert.` });
 }
 
 // ---------------------------------------------------------------------------
