@@ -192,6 +192,7 @@ const CASE_TYPES = [
   { label: 'Straffesak', value: 'Straffesak',  description: 'Sak relatert til strafferettslige forhold' },
   { label: 'Voldsskade erstatning', value: 'Voldsskade erstatning', description: 'Erstatningssak for voldsskade' },
   { label: 'Ransakelseordre', value: 'Ransakelseordre', description: 'Sak knyttet til ransakelseordre' },
+  { label: 'Varetektsfengsling', value: 'Varetektsfengsling', description: 'Sak knyttet til varetektsfengsling' },
   { label: 'Annet', value: 'Annet', description: 'Ingen forhåndsdefinerte dokumentasjonskrav' },
 ];
 
@@ -200,6 +201,7 @@ const CASE_TYPE_CHOICES = [
   { name: 'Straffesak', value: 'Straffesak' },
   { name: 'Voldsskade erstatning', value: 'Voldsskade erstatning' },
   { name: 'Ransakelseordre', value: 'Ransakelseordre' },
+  { name: 'Varetektsfengsling', value: 'Varetektsfengsling' },
   { name: 'Annet', value: 'Annet' },
 ];
 
@@ -559,6 +561,7 @@ function getCaseTypeCode(caseType) {
     Straffesak: 'STR',
     'Voldsskade erstatning': 'VOL',
     Ransakelseordre: 'RAN',
+    Varetektsfengsling: 'VTF',
     Annet: 'ANT',
   };
   return map[caseType] || 'GEN';
@@ -716,6 +719,7 @@ function extractCaseTypeFromLegacyContext(interaction, caseNumber) {
   if (code === 'STR') return 'Straffesak';
   if (code === 'VOL') return 'Voldsskade erstatning';
   if (code === 'RAN') return 'Ransakelseordre';
+  if (code === 'VTF') return 'Varetektsfengsling';
   return 'Ukjent';
 }
 
