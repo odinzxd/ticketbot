@@ -1601,21 +1601,33 @@ async function handleStatusButton(interaction, caseNumber, statusCode) {
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  updateStatusStmt.run(newStatus, caseData.case_number);
-  const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
   try {
-    await refreshCaseMessage(interaction.channel, updatedCase);
+    updateStatusStmt.run(newStatus, caseData.case_number);
+    const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
+
+    try {
+      await Promise.race([
+        refreshCaseMessage(interaction.channel, updatedCase),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('refresh timeout')), 4000)),
+      ]);
+    } catch (error) {
+      logAction(
+        'STATUS_REFRESH_SKIPPED',
+        `${caseData.case_number} kunne ikke oppdatere saksmelding (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+      );
+    }
+
+    recordCaseEvent(caseData.case_number, 'STATUS_UPDATED', interaction.user,
+      `Status endret til "${newStatus}" av ${interaction.user.tag} via knapp.`);
+
+    await interaction.editReply({ content: `✅ Status oppdatert til ${newStatus}.` });
   } catch (error) {
     logAction(
-      'STATUS_REFRESH_SKIPPED',
-      `${caseData.case_number} kunne ikke oppdatere saksmelding (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+      'STATUS_BUTTON_ERROR',
+      `${caseData.case_number} statusknapp feilet (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
     );
+    await interaction.editReply({ content: 'Kunne ikke oppdatere status akkurat nå.' }).catch(() => null);
   }
-
-  recordCaseEvent(caseData.case_number, 'STATUS_UPDATED', interaction.user,
-    `Status endret til "${newStatus}" av ${interaction.user.tag} via knapp.`);
-
-  await interaction.editReply({ content: `✅ Status oppdatert til ${newStatus}.` });
 }
 
 
