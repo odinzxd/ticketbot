@@ -1,4 +1,6 @@
 require('dotenv').config();
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   ActionRowBuilder,
@@ -34,6 +36,7 @@ const {
   START_CHANNEL_NAME = 'start-sak',
   COURT_CODE = 'TINGR',
   BOT_SIGNATURE = 'Med vennlig hilsen Tuva Hansen (Sekretær Oslo Tingrett)',
+  DB_PATH = 'cases.db',
 } = process.env;
 
 if (!DISCORD_TOKEN || !CLIENT_ID) {
@@ -48,7 +51,12 @@ const client = new Client({
 // ---------------------------------------------------------------------------
 // Database — SQLite med WAL for ytelse
 // ---------------------------------------------------------------------------
-const db = new Database('cases.db');
+const resolvedDbPath = path.isAbsolute(DB_PATH)
+  ? DB_PATH
+  : path.resolve(process.cwd(), DB_PATH);
+fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
+
+const db = new Database(resolvedDbPath);
 db.pragma('journal_mode = WAL');
 
 db.exec(`
@@ -592,7 +600,17 @@ function resolveCaseFromInteraction(interaction) {
 
 function resolveCaseFromButtonInteraction(interaction, caseNumber) {
   const normalizedCaseNumber = normalizeCaseNumber(caseNumber);
-  return getCaseByNumberStmt.get(normalizedCaseNumber) || getCaseByChannelStmt.get(interaction.channelId);
+  const caseByNumber = getCaseByNumberStmt.get(normalizedCaseNumber);
+  if (caseByNumber) return caseByNumber;
+
+  const caseByChannel = getCaseByChannelStmt.get(interaction.channelId);
+  if (caseByChannel) return caseByChannel;
+
+  logAction(
+    'CASE_LOOKUP_MISS',
+    `Fant ikke sak via knapp. customId=${interaction.customId} kanal=${interaction.channelId} guild=${interaction.guildId}`,
+  );
+  return null;
 }
 
 function getCaseChannel(guild, caseData) {
@@ -1602,6 +1620,8 @@ async function handleArchiveCase(interaction, caseNumber) {
 // ---------------------------------------------------------------------------
 client.once(Events.ClientReady, async readyClient => {
   logAction('READY', `Innlogget som ${readyClient.user.tag}`);
+  const caseCount = db.prepare('SELECT COUNT(*) AS count FROM cases').get()?.count || 0;
+  logAction('DB', `SQLite-fil: ${resolvedDbPath} | saker: ${caseCount}`);
   const guildNames = readyClient.guilds.cache.map(g => `${g.name} (${g.id})`).join(', ') || 'Ingen guilds';
   logAction('GUILDS', `Botten er koblet til: ${guildNames}`);
   try {
