@@ -30,6 +30,7 @@ const {
   DOMMER_ROLE_NAME = 'Dommer',
   SAKSBEHANDLER_ROLE_NAME = 'Saksbehandler',
   ADMIN_ROLE_NAME = 'Admin',
+  TINGRETT_ROLE_NAME = 'Tingrett',
   ADMIN_USER_ID = '',
   CASE_CATEGORY_NAME = 'Saker',
   ARCHIVE_CATEGORY_NAME = 'Arkiv',
@@ -618,6 +619,7 @@ function getConfiguredRoles(guild) {
     dommer:        getRoleByName(guild, DOMMER_ROLE_NAME),
     saksbehandler: getRoleByName(guild, SAKSBEHANDLER_ROLE_NAME),
     admin:         getRoleByName(guild, ADMIN_ROLE_NAME),
+    tingrett:      getRoleByName(guild, TINGRETT_ROLE_NAME),
   };
 }
 
@@ -626,7 +628,7 @@ function hasRole(member, roleName) {
 }
 
 function hasAnyStaffRole(member) {
-  return [DOMMER_ROLE_NAME, SAKSBEHANDLER_ROLE_NAME, ADMIN_ROLE_NAME].some(n => hasRole(member, n));
+  return [DOMMER_ROLE_NAME, SAKSBEHANDLER_ROLE_NAME, ADMIN_ROLE_NAME, TINGRETT_ROLE_NAME].some(n => hasRole(member, n));
 }
 
 function isConfiguredAdminUser(userId) {
@@ -659,7 +661,7 @@ function setBotSetting(key, value) {
 
 function canManageCase(member, caseData) {
   if (!member) return false;
-  if (isAdmin(member) || isJudge(member)) return true;
+  if (isAdmin(member) || isJudge(member) || hasRole(member, TINGRETT_ROLE_NAME)) return true;
   if (isCaseHandler(member) && caseData.assigned_to === member.id) return true;
   return false;
 }
@@ -1064,7 +1066,7 @@ async function createCaseChannel(guild, caseData, creatorId) {
 }
 
 function buildActiveCasePermissionOverwrites(guild, creatorId) {
-  const { dommer, saksbehandler, admin } = getConfiguredRoles(guild);
+  const { dommer, saksbehandler, admin, tingrett } = getConfiguredRoles(guild);
 
   // Alle kan opprette saker — staff-roller legges til om de finnes.
   const permissionOverwrites = [
@@ -1085,6 +1087,7 @@ function buildActiveCasePermissionOverwrites(guild, creatorId) {
     { role: dommer,        permissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { role: saksbehandler, permissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
     { role: admin,         permissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+    { role: tingrett,      permissions: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
   ];
 
   for (const { role, permissions } of staffRoles) {
@@ -1096,7 +1099,7 @@ function buildActiveCasePermissionOverwrites(guild, creatorId) {
 }
 
 function buildArchivedCasePermissionOverwrites(guild) {
-  const { dommer, admin } = getConfiguredRoles(guild);
+  const { dommer, admin, tingrett } = getConfiguredRoles(guild);
 
   const permissionOverwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -1116,6 +1119,18 @@ function buildArchivedCasePermissionOverwrites(guild) {
   if (admin) {
     permissionOverwrites.push({
       id: admin.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+      ],
+    });
+  }
+
+  if (tingrett) {
+    permissionOverwrites.push({
+      id: tingrett.id,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
