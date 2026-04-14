@@ -413,17 +413,7 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('sendmelding')
-    .setDescription('Åpner skriveboks for utsending (kun admin)')
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Kanalen meldingen skal sendes i')
-        .setRequired(true),
-    )
-    .addBooleanOption(option =>
-      option.setName('forhandsvisning')
-        .setDescription('Vis forhåndsvisning før sending (standard: på)')
-        .setRequired(false),
-    ),
+    .setDescription('Åpner skriveboks for å sende en melding som botten (kun admin)'),
 ].map(command => command.toJSON());
 
 // ---------------------------------------------------------------------------
@@ -603,9 +593,18 @@ async function openSendMessageModal(interaction, channelId, usePreview) {
   await interaction.showModal(modal);
 }
 
-async function openSendMeldingComposerModal(interaction, channelId, usePreview) {
+function resolveChannelFromText(guild, input) {
+  const trimmed = String(input || '').trim();
+  const mentionMatch = trimmed.match(/^<#(\d+)>$/);
+  if (mentionMatch) return guild.channels.cache.get(mentionMatch[1]) || null;
+  if (/^\d{17,20}$/.test(trimmed)) return guild.channels.cache.get(trimmed) || null;
+  const name = trimmed.replace(/^#/, '').toLowerCase();
+  return guild.channels.cache.find(c => c.name.toLowerCase() === name && c.isTextBased()) || null;
+}
+
+async function openSendMeldingComposerModal(interaction) {
   const modal = new ModalBuilder()
-    .setCustomId(`send_msg_modal:compose:${channelId}:${usePreview ? '1' : '0'}`)
+    .setCustomId('send_msg_modal:compose')
     .setTitle('Send melding');
 
   const titleInput = new TextInputBuilder()
@@ -614,15 +613,15 @@ async function openSendMeldingComposerModal(interaction, channelId, usePreview) 
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(140)
-    .setPlaceholder('Skriv tittel ...');
+    .setPlaceholder('F.eks: Innkalling til rettsmøte');
 
   const tekstInput = new TextInputBuilder()
     .setCustomId('tekst')
     .setLabel('Tekst')
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true)
-    .setMaxLength(1600)
-    .setPlaceholder('Skriv meldingen ...');
+    .setMaxLength(1500)
+    .setPlaceholder('Skriv meldingen her ...');
 
   const signatureInput = new TextInputBuilder()
     .setCustomId('signatur')
@@ -632,10 +631,19 @@ async function openSendMeldingComposerModal(interaction, channelId, usePreview) 
     .setMaxLength(180)
     .setValue(BOT_SIGNATURE);
 
+  const kanalInput = new TextInputBuilder()
+    .setCustomId('kanal')
+    .setLabel('Kanal (mention, navn eller ID)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100)
+    .setPlaceholder('#kanal-navn');
+
   modal.addComponents(
     new ActionRowBuilder().addComponents(titleInput),
     new ActionRowBuilder().addComponents(tekstInput),
     new ActionRowBuilder().addComponents(signatureInput),
+    new ActionRowBuilder().addComponents(kanalInput),
   );
 
   await interaction.showModal(modal);
@@ -1845,13 +1853,7 @@ async function handleSendMelding(interaction) {
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
   if (interaction.commandName === 'sendmelding') {
-    const kanal = interaction.options.getChannel('kanal');
-    const usePreview = interaction.options.getBoolean('forhandsvisning') ?? true;
-
-    if (!kanal?.isTextBased?.())
-      return safeReply(interaction, { content: 'Velg en gyldig tekstkanal.' });
-
-    await openSendMeldingComposerModal(interaction, kanal.id, usePreview);
+    await openSendMeldingComposerModal(interaction);
     return;
   }
 
@@ -1874,7 +1876,33 @@ async function handleSendMeldingModal(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
-  const [, , mode, channelId, previewFlag] = interaction.customId.split(':');
+  const parts = interaction.customId.split(':');
+  const mode = parts[2];
+
+  if (mode === 'compose') {
+    const title    = interaction.fields.getTextInputValue('tittel');
+    const tekst    = interaction.fields.getTextInputValue('tekst');
+    const signatur = interaction.fields.getTextInputValue('signatur');
+    const kanalTekst = interaction.fields.getTextInputValue('kanal');
+
+    const kanal = resolveChannelFromText(interaction.guild, kanalTekst)
+      || await (async () => {
+        const mentionMatch = kanalTekst.trim().match(/^<#(\d+)>$/);
+        const id = mentionMatch?.[1] || (/^\d{17,20}$/.test(kanalTekst.trim()) ? kanalTekst.trim() : null);
+        return id ? interaction.guild.channels.fetch(id).catch(() => null) : null;
+      })();
+
+    if (!kanal?.isTextBased?.())
+      return safeReply(interaction, {
+        content: `Fant ikke kanalen **${kanalTekst}**. Prøv med #kanal-navn, kanalens ID, eller en mention.`,
+      });
+
+    const preparedContent = buildOutgoingMessageContentFromParts(title, tekst, signatur);
+    return sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, true);
+  }
+
+  // simple-mode (fra /send_melding)
+  const [, , , channelId, previewFlag] = parts;
   const usePreview = previewFlag !== '0';
 
   const kanal = interaction.guild.channels.cache.get(channelId)
@@ -1882,14 +1910,6 @@ async function handleSendMeldingModal(interaction) {
 
   if (!kanal?.isTextBased?.())
     return safeReply(interaction, { content: 'Fant ikke målkanalen for meldingen.' });
-
-  if (mode === 'compose') {
-    const title = interaction.fields.getTextInputValue('tittel');
-    const tekst = interaction.fields.getTextInputValue('tekst');
-    const signatur = interaction.fields.getTextInputValue('signatur');
-    const preparedContent = buildOutgoingMessageContentFromParts(title, tekst, signatur);
-    return sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, usePreview);
-  }
 
   const melding = interaction.fields.getTextInputValue('melding');
   return sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview);
