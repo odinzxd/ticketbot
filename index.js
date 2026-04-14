@@ -7,6 +7,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelSelectMenuBuilder,
   ChannelType,
   Client,
   EmbedBuilder,
@@ -593,18 +594,24 @@ async function openSendMessageModal(interaction, channelId, usePreview) {
   await interaction.showModal(modal);
 }
 
-function resolveChannelFromText(guild, input) {
-  const trimmed = String(input || '').trim();
-  const mentionMatch = trimmed.match(/^<#(\d+)>$/);
-  if (mentionMatch) return guild.channels.cache.get(mentionMatch[1]) || null;
-  if (/^\d{17,20}$/.test(trimmed)) return guild.channels.cache.get(trimmed) || null;
-  const name = trimmed.replace(/^#/, '').toLowerCase();
-  return guild.channels.cache.find(c => c.name.toLowerCase() === name && c.isTextBased()) || null;
+async function openSendMeldingChannelSelect(interaction) {
+  const channelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId('sendmelding_kanal_select')
+    .setPlaceholder('Velg kanalen meldingen skal sendes i ...')
+    .addChannelTypes(ChannelType.GuildText)
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  await interaction.reply({
+    content: '**Steg 1 av 2** — Velg kanalen meldingen skal sendes i:',
+    components: [new ActionRowBuilder().addComponents(channelSelect)],
+    flags: MessageFlags.Ephemeral,
+  });
 }
 
-async function openSendMeldingComposerModal(interaction) {
+async function openSendMeldingComposerModal(interaction, channelId) {
   const modal = new ModalBuilder()
-    .setCustomId('send_msg_modal:compose')
+    .setCustomId(`send_msg_modal:compose:${channelId}`)
     .setTitle('Send melding');
 
   const titleInput = new TextInputBuilder()
@@ -631,22 +638,26 @@ async function openSendMeldingComposerModal(interaction) {
     .setMaxLength(180)
     .setValue(BOT_SIGNATURE);
 
-  const kanalInput = new TextInputBuilder()
-    .setCustomId('kanal')
-    .setLabel('Kanal (mention, navn eller ID)')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setMaxLength(100)
-    .setPlaceholder('#kanal-navn');
-
   modal.addComponents(
     new ActionRowBuilder().addComponents(titleInput),
     new ActionRowBuilder().addComponents(tekstInput),
     new ActionRowBuilder().addComponents(signatureInput),
-    new ActionRowBuilder().addComponents(kanalInput),
   );
 
   await interaction.showModal(modal);
+}
+
+async function handleSendMeldingKanalSelect(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return interaction.update({ content: 'Kun admin kan bruke denne kommandoen.', components: [] });
+
+  const channelId = interaction.values[0];
+  const kanal = interaction.guild.channels.cache.get(channelId);
+
+  if (!kanal?.isTextBased?.())
+    return interaction.update({ content: 'Valgt kanal er ikke en tekstkanal. Prøv igjen.', components: [] });
+
+  await openSendMeldingComposerModal(interaction, channelId);
 }
 
 function parseJsonArray(value) {
@@ -1853,7 +1864,7 @@ async function handleSendMelding(interaction) {
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
   if (interaction.commandName === 'sendmelding') {
-    await openSendMeldingComposerModal(interaction);
+    await openSendMeldingChannelSelect(interaction);
     return;
   }
 
@@ -1880,22 +1891,16 @@ async function handleSendMeldingModal(interaction) {
   const mode = parts[2];
 
   if (mode === 'compose') {
+    const channelId = parts[3];
     const title    = interaction.fields.getTextInputValue('tittel');
     const tekst    = interaction.fields.getTextInputValue('tekst');
     const signatur = interaction.fields.getTextInputValue('signatur');
-    const kanalTekst = interaction.fields.getTextInputValue('kanal');
 
-    const kanal = resolveChannelFromText(interaction.guild, kanalTekst)
-      || await (async () => {
-        const mentionMatch = kanalTekst.trim().match(/^<#(\d+)>$/);
-        const id = mentionMatch?.[1] || (/^\d{17,20}$/.test(kanalTekst.trim()) ? kanalTekst.trim() : null);
-        return id ? interaction.guild.channels.fetch(id).catch(() => null) : null;
-      })();
+    const kanal = interaction.guild.channels.cache.get(channelId)
+      || await interaction.guild.channels.fetch(channelId).catch(() => null);
 
     if (!kanal?.isTextBased?.())
-      return safeReply(interaction, {
-        content: `Fant ikke kanalen **${kanalTekst}**. Prøv med #kanal-navn, kanalens ID, eller en mention.`,
-      });
+      return safeReply(interaction, { content: 'Fant ikke målkanalen. Prøv kommandoen på nytt.' });
 
     const preparedContent = buildOutgoingMessageContentFromParts(title, tekst, signatur);
     return sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, true);
@@ -2287,6 +2292,9 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'new_case_type_select')
       return handleCaseTypeSelection(interaction);
+
+    if (interaction.isChannelSelectMenu() && interaction.customId === 'sendmelding_kanal_select')
+      return handleSendMeldingKanalSelect(interaction);
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('new_case_modal:'))
       return handleNewCaseModal(interaction);
