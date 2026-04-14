@@ -413,21 +413,15 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('sendmelding')
-    .setDescription('Alias for send_melding (kun admin)')
-    .addStringOption(option =>
-      option.setName('melding')
-        .setDescription('Meldingen som skal sendes (tom = åpner skriveboks)')
-        .setRequired(false)
-        .setMaxLength(1800),
+    .setDescription('Åpner skriveboks for utsending (kun admin)')
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Kanalen meldingen skal sendes i')
+        .setRequired(true),
     )
     .addBooleanOption(option =>
       option.setName('forhandsvisning')
         .setDescription('Vis forhåndsvisning før sending (standard: på)')
-        .setRequired(false),
-    )
-    .addChannelOption(option =>
-      option.setName('kanal')
-        .setDescription('Kanalen meldingen skal sendes i (standard: gjeldende kanal)')
         .setRequired(false),
     ),
 ].map(command => command.toJSON());
@@ -503,6 +497,20 @@ function buildOutgoingMessageContent(melding) {
   return `${melding}\n\n*${BOT_SIGNATURE}*`;
 }
 
+function buildOutgoingMessageContentFromParts(title, tekst, signatur) {
+  const normalizedTitle = normalizeMessageForDiscord(title).replace(/^\*\*(.*)\*\*$/s, '$1').trim();
+  const normalizedText = normalizeMessageForDiscord(tekst);
+  const normalizedSignature = normalizeMessageForDiscord(signatur);
+
+  const lines = [
+    normalizedTitle ? `**${normalizedTitle}**` : '',
+    normalizedText,
+    normalizedSignature ? `*${normalizedSignature}*` : '',
+  ].filter(Boolean);
+
+  return lines.join('\n\n').trim();
+}
+
 function rememberOutgoingMessageDraft(payload) {
   const draftId = randomUUID();
   pendingOutgoingMessages.set(draftId, payload);
@@ -529,7 +537,7 @@ function buildSendPreviewEmbed(melding, kanal) {
   return new EmbedBuilder()
     .setColor(0x2d7d46)
     .setTitle('Forhåndsvisning av melding')
-    .setDescription(truncate(buildOutgoingMessageContent(melding), 4096))
+    .setDescription(truncate(melding, 4096))
     .addFields({ name: 'Målkanal', value: `${kanal}` })
     .setFooter({ text: 'Markdown støttes (f.eks. **fet**, *kursiv*, __understreket__)' })
     .setTimestamp();
@@ -541,14 +549,14 @@ async function resolveTargetChannel(interaction) {
   return kanal;
 }
 
-async function sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview) {
-  const cleanedMelding = normalizeMessageForDiscord(melding);
-  if (!cleanedMelding)
+async function sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, usePreview) {
+  const cleanedContent = normalizeMessageForDiscord(preparedContent);
+  if (!cleanedContent)
     return safeReply(interaction, { content: 'Meldingen kan ikke være tom.' });
 
   if (!usePreview) {
     try {
-      await kanal.send({ content: buildOutgoingMessageContent(cleanedMelding) });
+      await kanal.send({ content: cleanedContent });
       return safeReply(interaction, { content: `Melding sendt i ${kanal}.` });
     } catch (err) {
       return safeReply(interaction, { content: `Kunne ikke sende melding: ${err.message}` });
@@ -559,19 +567,28 @@ async function sendMessageWithOptionalPreview(interaction, melding, kanal, usePr
     guildId: interaction.guildId,
     channelId: kanal.id,
     userId: interaction.user.id,
-    melding: cleanedMelding,
+    content: cleanedContent,
   });
 
   return safeReply(interaction, {
     content: 'Slik vil meldingen se ut. Trykk **Send nå** for å publisere.',
-    embeds: [buildSendPreviewEmbed(cleanedMelding, kanal)],
+    embeds: [buildSendPreviewEmbed(cleanedContent, kanal)],
     components: createSendPreviewActionRows(draftId),
   });
 }
 
+async function sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview) {
+  const cleanedMelding = normalizeMessageForDiscord(melding);
+  if (!cleanedMelding)
+    return safeReply(interaction, { content: 'Meldingen kan ikke være tom.' });
+
+  const preparedContent = buildOutgoingMessageContent(cleanedMelding);
+  return sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, usePreview);
+}
+
 async function openSendMessageModal(interaction, channelId, usePreview) {
   const modal = new ModalBuilder()
-    .setCustomId(`send_msg_modal:${channelId}:${usePreview ? '1' : '0'}`)
+    .setCustomId(`send_msg_modal:simple:${channelId}:${usePreview ? '1' : '0'}`)
     .setTitle('Send melding som bot');
 
   const textInput = new TextInputBuilder()
@@ -583,6 +600,44 @@ async function openSendMessageModal(interaction, channelId, usePreview) {
     .setPlaceholder('Eksempel: **Viktig**\nDette er en melding med *utheving*.');
 
   modal.addComponents(new ActionRowBuilder().addComponents(textInput));
+  await interaction.showModal(modal);
+}
+
+async function openSendMeldingComposerModal(interaction, channelId, usePreview) {
+  const modal = new ModalBuilder()
+    .setCustomId(`send_msg_modal:compose:${channelId}:${usePreview ? '1' : '0'}`)
+    .setTitle('Send melding');
+
+  const titleInput = new TextInputBuilder()
+    .setCustomId('tittel')
+    .setLabel('Tittel (blir uthevet/fet)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(140)
+    .setPlaceholder('Skriv tittel ...');
+
+  const tekstInput = new TextInputBuilder()
+    .setCustomId('tekst')
+    .setLabel('Tekst')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(1600)
+    .setPlaceholder('Skriv meldingen ...');
+
+  const signatureInput = new TextInputBuilder()
+    .setCustomId('signatur')
+    .setLabel('Signatur')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(180)
+    .setValue(BOT_SIGNATURE);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(titleInput),
+    new ActionRowBuilder().addComponents(tekstInput),
+    new ActionRowBuilder().addComponents(signatureInput),
+  );
+
   await interaction.showModal(modal);
 }
 
@@ -1789,6 +1844,17 @@ async function handleSendMelding(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
+  if (interaction.commandName === 'sendmelding') {
+    const kanal = interaction.options.getChannel('kanal');
+    const usePreview = interaction.options.getBoolean('forhandsvisning') ?? true;
+
+    if (!kanal?.isTextBased?.())
+      return safeReply(interaction, { content: 'Velg en gyldig tekstkanal.' });
+
+    await openSendMeldingComposerModal(interaction, kanal.id, usePreview);
+    return;
+  }
+
   const melding = interaction.options.getString('melding');
   const kanal = await resolveTargetChannel(interaction);
   const usePreview = interaction.options.getBoolean('forhandsvisning') ?? true;
@@ -1808,9 +1874,8 @@ async function handleSendMeldingModal(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
-  const [, , channelId, previewFlag] = interaction.customId.split(':');
+  const [, , mode, channelId, previewFlag] = interaction.customId.split(':');
   const usePreview = previewFlag !== '0';
-  const melding = interaction.fields.getTextInputValue('melding');
 
   const kanal = interaction.guild.channels.cache.get(channelId)
     || await interaction.guild.channels.fetch(channelId).catch(() => null);
@@ -1818,7 +1883,16 @@ async function handleSendMeldingModal(interaction) {
   if (!kanal?.isTextBased?.())
     return safeReply(interaction, { content: 'Fant ikke målkanalen for meldingen.' });
 
-  await sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview);
+  if (mode === 'compose') {
+    const title = interaction.fields.getTextInputValue('tittel');
+    const tekst = interaction.fields.getTextInputValue('tekst');
+    const signatur = interaction.fields.getTextInputValue('signatur');
+    const preparedContent = buildOutgoingMessageContentFromParts(title, tekst, signatur);
+    return sendPreparedMessageWithOptionalPreview(interaction, preparedContent, kanal, usePreview);
+  }
+
+  const melding = interaction.fields.getTextInputValue('melding');
+  return sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview);
 }
 
 async function handleSendPreviewButton(interaction, action, draftId) {
@@ -1855,7 +1929,7 @@ async function handleSendPreviewButton(interaction, action, draftId) {
   }
 
   try {
-    await kanal.send({ content: buildOutgoingMessageContent(draft.melding) });
+    await kanal.send({ content: draft.content });
     pendingOutgoingMessages.delete(draftId);
     await interaction.editReply({
       content: `✅ Melding sendt i ${kanal}.`,
@@ -1865,7 +1939,7 @@ async function handleSendPreviewButton(interaction, action, draftId) {
   } catch (err) {
     await interaction.editReply({
       content: `Kunne ikke sende melding: ${err.message}`,
-      embeds: [buildSendPreviewEmbed(draft.melding, kanal)],
+      embeds: [buildSendPreviewEmbed(draft.content, kanal)],
       components: createSendPreviewActionRows(draftId),
     });
   }
