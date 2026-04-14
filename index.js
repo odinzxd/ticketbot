@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 
 const {
   ActionRowBuilder,
@@ -213,6 +214,9 @@ const PRIORITY_CHOICES = [
   { name: 'Kritisk', value: 'Kritisk' },
 ];
 
+const OUTGOING_MESSAGE_TTL_MS = 10 * 60 * 1000;
+const pendingOutgoingMessages = new Map();
+
 const COMMANDS = [
   new SlashCommandBuilder()
     .setName('start')
@@ -393,9 +397,33 @@ const COMMANDS = [
     .setDescription('Send en melding som botten i en kanal (kun admin)')
     .addStringOption(option =>
       option.setName('melding')
-        .setDescription('Meldingen som skal sendes')
-        .setRequired(true)
+        .setDescription('Meldingen som skal sendes (tom = åpner skriveboks)')
+        .setRequired(false)
         .setMaxLength(1800),
+    )
+    .addBooleanOption(option =>
+      option.setName('forhandsvisning')
+        .setDescription('Vis forhåndsvisning før sending (standard: på)')
+        .setRequired(false),
+    )
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Kanalen meldingen skal sendes i (standard: gjeldende kanal)')
+        .setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('sendmelding')
+    .setDescription('Alias for send_melding (kun admin)')
+    .addStringOption(option =>
+      option.setName('melding')
+        .setDescription('Meldingen som skal sendes (tom = åpner skriveboks)')
+        .setRequired(false)
+        .setMaxLength(1800),
+    )
+    .addBooleanOption(option =>
+      option.setName('forhandsvisning')
+        .setDescription('Vis forhåndsvisning før sending (standard: på)')
+        .setRequired(false),
     )
     .addChannelOption(option =>
       option.setName('kanal')
@@ -449,6 +477,113 @@ function truncate(text, max = 1024) {
   if (!text) return 'Ikke oppgitt';
   if (text.length <= max) return text;
   return `${text.slice(0, max - 3)}...`;
+}
+
+function normalizeMessageForDiscord(input) {
+  let text = String(input || '').replace(/\r\n?/g, '\n').trim();
+  if (!text) return '';
+
+  text = text
+    .replace(/<\s*(strong|b)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '**$2**')
+    .replace(/<\s*(em|i)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '*$2*')
+    .replace(/<\s*u\s*>([\s\S]*?)<\s*\/\s*u\s*>/gi, '__$1__')
+    .replace(/<\s*(s|strike)\s*>([\s\S]*?)<\s*\/\s*\1\s*>/gi, '~~$2~~')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p>/gi, '\n\n')
+    .replace(/<\/?p>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+
+  return text.trim();
+}
+
+function buildOutgoingMessageContent(melding) {
+  return `${melding}\n\n*${BOT_SIGNATURE}*`;
+}
+
+function rememberOutgoingMessageDraft(payload) {
+  const draftId = randomUUID();
+  pendingOutgoingMessages.set(draftId, payload);
+  setTimeout(() => pendingOutgoingMessages.delete(draftId), OUTGOING_MESSAGE_TTL_MS).unref();
+  return draftId;
+}
+
+function createSendPreviewActionRows(draftId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`send_preview_confirm:${draftId}`)
+        .setLabel('Send nå')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`send_preview_cancel:${draftId}`)
+        .setLabel('Avbryt')
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  ];
+}
+
+function buildSendPreviewEmbed(melding, kanal) {
+  return new EmbedBuilder()
+    .setColor(0x2d7d46)
+    .setTitle('Forhåndsvisning av melding')
+    .setDescription(truncate(buildOutgoingMessageContent(melding), 4096))
+    .addFields({ name: 'Målkanal', value: `${kanal}` })
+    .setFooter({ text: 'Markdown støttes (f.eks. **fet**, *kursiv*, __understreket__)' })
+    .setTimestamp();
+}
+
+async function resolveTargetChannel(interaction) {
+  const kanal = interaction.options?.getChannel('kanal') || interaction.channel;
+  if (!kanal?.isTextBased?.()) return null;
+  return kanal;
+}
+
+async function sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview) {
+  const cleanedMelding = normalizeMessageForDiscord(melding);
+  if (!cleanedMelding)
+    return safeReply(interaction, { content: 'Meldingen kan ikke være tom.' });
+
+  if (!usePreview) {
+    try {
+      await kanal.send({ content: buildOutgoingMessageContent(cleanedMelding) });
+      return safeReply(interaction, { content: `Melding sendt i ${kanal}.` });
+    } catch (err) {
+      return safeReply(interaction, { content: `Kunne ikke sende melding: ${err.message}` });
+    }
+  }
+
+  const draftId = rememberOutgoingMessageDraft({
+    guildId: interaction.guildId,
+    channelId: kanal.id,
+    userId: interaction.user.id,
+    melding: cleanedMelding,
+  });
+
+  return safeReply(interaction, {
+    content: 'Slik vil meldingen se ut. Trykk **Send nå** for å publisere.',
+    embeds: [buildSendPreviewEmbed(cleanedMelding, kanal)],
+    components: createSendPreviewActionRows(draftId),
+  });
+}
+
+async function openSendMessageModal(interaction, channelId, usePreview) {
+  const modal = new ModalBuilder()
+    .setCustomId(`send_msg_modal:${channelId}:${usePreview ? '1' : '0'}`)
+    .setTitle('Send melding som bot');
+
+  const textInput = new TextInputBuilder()
+    .setCustomId('melding')
+    .setLabel('Melding')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true)
+    .setMaxLength(1800)
+    .setPlaceholder('Eksempel: **Viktig**\nDette er en melding med *utheving*.');
+
+  modal.addComponents(new ActionRowBuilder().addComponents(textInput));
+  await interaction.showModal(modal);
 }
 
 function parseJsonArray(value) {
@@ -1654,15 +1789,85 @@ async function handleSendMelding(interaction) {
   if (!hasGuildAdminAccess(interaction))
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
-  const melding  = interaction.options.getString('melding');
-  const kanal    = interaction.options.getChannel('kanal') || interaction.channel;
-  const fullText = `${melding}\n\n*${BOT_SIGNATURE}*`;
+  const melding = interaction.options.getString('melding');
+  const kanal = await resolveTargetChannel(interaction);
+  const usePreview = interaction.options.getBoolean('forhandsvisning') ?? true;
+
+  if (!kanal)
+    return safeReply(interaction, { content: 'Velg en gyldig tekstkanal.' });
+
+  if (!melding) {
+    await openSendMessageModal(interaction, kanal.id, usePreview);
+    return;
+  }
+
+  await sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview);
+}
+
+async function handleSendMeldingModal(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
+
+  const [, , channelId, previewFlag] = interaction.customId.split(':');
+  const usePreview = previewFlag !== '0';
+  const melding = interaction.fields.getTextInputValue('melding');
+
+  const kanal = interaction.guild.channels.cache.get(channelId)
+    || await interaction.guild.channels.fetch(channelId).catch(() => null);
+
+  if (!kanal?.isTextBased?.())
+    return safeReply(interaction, { content: 'Fant ikke målkanalen for meldingen.' });
+
+  await sendMessageWithOptionalPreview(interaction, melding, kanal, usePreview);
+}
+
+async function handleSendPreviewButton(interaction, action, draftId) {
+  const draft = pendingOutgoingMessages.get(draftId);
+  if (!draft)
+    return safeReply(interaction, { content: 'Forhåndsvisningen har utløpt. Kjør kommandoen på nytt.' });
+
+  if (interaction.user.id !== draft.userId)
+    return safeReply(interaction, { content: 'Du kan kun håndtere din egen forhåndsvisning.' });
+
+  if (action === 'cancel') {
+    pendingOutgoingMessages.delete(draftId);
+    return interaction.update({
+      content: 'Sending avbrutt.',
+      embeds: [],
+      components: [],
+    });
+  }
+
+  if (action !== 'confirm')
+    return safeReply(interaction, { content: 'Ugyldig handling for forhåndsvisning.' });
+
+  await interaction.deferUpdate();
+
+  const kanal = interaction.guild.channels.cache.get(draft.channelId)
+    || await interaction.guild.channels.fetch(draft.channelId).catch(() => null);
+
+  if (!kanal?.isTextBased?.()) {
+    return interaction.editReply({
+      content: 'Kunne ikke finne målkanalen. Lag en ny forhåndsvisning.',
+      embeds: [],
+      components: [],
+    });
+  }
 
   try {
-    await kanal.send({ content: fullText });
-    await safeReply(interaction, { content: `Melding sendt i ${kanal}.` });
+    await kanal.send({ content: buildOutgoingMessageContent(draft.melding) });
+    pendingOutgoingMessages.delete(draftId);
+    await interaction.editReply({
+      content: `✅ Melding sendt i ${kanal}.`,
+      embeds: [],
+      components: [],
+    });
   } catch (err) {
-    await safeReply(interaction, { content: `Kunne ikke sende melding: ${err.message}` });
+    await interaction.editReply({
+      content: `Kunne ikke sende melding: ${err.message}`,
+      embeds: [buildSendPreviewEmbed(draft.melding, kanal)],
+      components: createSendPreviewActionRows(draftId),
+    });
   }
 }
 
@@ -1982,7 +2187,8 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'sett_prioritet')  return handleSetPriorityCommand(interaction);
       if (interaction.commandName === 'legg_til_vitne')  return handleAddWitnessCommand(interaction);
       if (interaction.commandName === 'slett_arkiv')     return handleDeleteArchiveCommand(interaction);
-      if (interaction.commandName === 'send_melding')    return handleSendMelding(interaction);
+      if (interaction.commandName === 'send_melding' || interaction.commandName === 'sendmelding')
+        return handleSendMelding(interaction);
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'new_case_type_select')
@@ -1994,8 +2200,20 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isModalSubmit() && interaction.customId.startsWith('witness_modal:'))
       return handleWitnessModal(interaction);
 
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('send_msg_modal:'))
+      return handleSendMeldingModal(interaction);
+
     if (interaction.isButton()) {
       if (interaction.customId === 'start_case') return handleStartCaseButton(interaction);
+
+      if (interaction.customId.startsWith('send_preview_confirm:')) {
+        const [, draftId] = interaction.customId.split(':');
+        return handleSendPreviewButton(interaction, 'confirm', draftId);
+      }
+      if (interaction.customId.startsWith('send_preview_cancel:')) {
+        const [, draftId] = interaction.customId.split(':');
+        return handleSendPreviewButton(interaction, 'cancel', draftId);
+      }
 
       const [action, caseNumber, extra] = interaction.customId.split(':');
       if (!action || !caseNumber) return safeReply(interaction, { content: 'Ugyldig handling.' });
