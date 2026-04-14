@@ -1888,10 +1888,10 @@ async function handleSendMeldingModal(interaction) {
     return safeReply(interaction, { content: 'Kun admin kan bruke denne kommandoen.' });
 
   const parts = interaction.customId.split(':');
-  const mode = parts[2];
+  const mode = parts[1];
 
   if (mode === 'compose') {
-    const channelId = parts[3];
+    const channelId = parts[2];
     const title    = interaction.fields.getTextInputValue('tittel');
     const tekst    = interaction.fields.getTextInputValue('tekst');
     const signatur = interaction.fields.getTextInputValue('signatur');
@@ -1907,7 +1907,7 @@ async function handleSendMeldingModal(interaction) {
   }
 
   // simple-mode (fra /send_melding)
-  const [, , , channelId, previewFlag] = parts;
+  const [, , channelId, previewFlag] = parts;
   const usePreview = previewFlag !== '0';
 
   const kanal = interaction.guild.channels.cache.get(channelId)
