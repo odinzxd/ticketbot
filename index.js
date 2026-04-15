@@ -879,7 +879,12 @@ function canManageCase(member, caseData) {
 // Hjelpefunksjoner — sak-oppslag
 // ---------------------------------------------------------------------------
 function normalizeCaseNumber(caseNumber) {
-  return String(caseNumber || '').trim().toUpperCase();
+  return String(caseNumber || '')
+    .replace(/[‐‑‒–—−]/g, '-')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toUpperCase();
 }
 
 function getInteractionCaseLookupChannelIds(interaction) {
@@ -909,6 +914,22 @@ function extractCaseNumberFromInteractionChannelContext(interaction) {
   for (const topic of candidates) {
     const match = String(topic || '').match(/Sak\s+([A-Z0-9\-]+)/i);
     if (match?.[1]) return normalizeCaseNumber(match[1]);
+  }
+
+  return '';
+}
+
+function extractCaseNumberFromMessageBatch(messages) {
+  for (const message of messages.values()) {
+    const embeds = message?.embeds || [];
+    for (const embed of embeds) {
+      const titleMatch = String(embed?.title || '').match(/Saksmappe\s*•\s*(.+)$/i);
+      if (titleMatch?.[1]) return normalizeCaseNumber(titleMatch[1]);
+
+      const fields = embed?.fields || [];
+      const caseField = fields.find(field => String(field?.name || '').toLowerCase() === 'saksnummer');
+      if (caseField?.value) return normalizeCaseNumber(caseField.value);
+    }
   }
 
   return '';
@@ -991,6 +1012,24 @@ async function resolveCaseFromInteractionWithFetch(interaction) {
     }
 
     return getCaseByNumberStmt.get(caseByTopic.case_number);
+  }
+
+  if (fetchedChannel.isTextBased?.()) {
+    const recentMessages = await fetchedChannel.messages?.fetch({ limit: 50 }).catch(() => null);
+    const caseNumberFromMessages = recentMessages
+      ? extractCaseNumberFromMessageBatch(recentMessages)
+      : '';
+
+    if (caseNumberFromMessages) {
+      const caseByMessages = getCaseByNumberStmt.get(caseNumberFromMessages);
+      if (caseByMessages) {
+        if (repairChannelId && caseByMessages.channel_id !== repairChannelId) {
+          updateCaseChannelStmt.run(repairChannelId, caseByMessages.case_number);
+          logAction('CASE_CHANNEL_REPAIRED', `${caseByMessages.case_number} kanal oppdatert via meldingsoppslag til ${repairChannelId}`);
+        }
+        return getCaseByNumberStmt.get(caseByMessages.case_number);
+      }
+    }
   }
 
   return null;
