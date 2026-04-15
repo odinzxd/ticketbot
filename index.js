@@ -882,11 +882,78 @@ function normalizeCaseNumber(caseNumber) {
   return String(caseNumber || '').trim().toUpperCase();
 }
 
+function getInteractionCaseLookupChannelIds(interaction) {
+  const ids = [];
+
+  if (interaction.channelId) ids.push(interaction.channelId);
+
+  const isThread = interaction.channel?.isThread?.();
+  const parentId = isThread ? interaction.channel?.parentId : null;
+  if (parentId && !ids.includes(parentId)) ids.push(parentId);
+
+  return ids;
+}
+
+function getInteractionCaseRepairChannelId(interaction) {
+  const isThread = interaction.channel?.isThread?.();
+  if (isThread && interaction.channel?.parentId) return interaction.channel.parentId;
+  return interaction.channelId || null;
+}
+
+function extractCaseNumberFromInteractionChannelContext(interaction) {
+  const candidates = [
+    interaction.channel?.topic,
+    interaction.channel?.parent?.topic,
+  ];
+
+  for (const topic of candidates) {
+    const match = String(topic || '').match(/Sak\s+([A-Z0-9\-]+)/i);
+    if (match?.[1]) return normalizeCaseNumber(match[1]);
+  }
+
+  return '';
+}
+
 function resolveCaseFromInteraction(interaction) {
   const num = normalizeCaseNumber(interaction.options?.getString('saksnummer'));
-  return num
-    ? getCaseByNumberStmt.get(num)
-    : getCaseByChannelStmt.get(interaction.channelId);
+  const repairChannelId = getInteractionCaseRepairChannelId(interaction);
+
+  if (num) {
+    const caseByNumber = getCaseByNumberStmt.get(num);
+    if (!caseByNumber) return null;
+
+    if (repairChannelId && caseByNumber.channel_id !== repairChannelId) {
+      updateCaseChannelStmt.run(repairChannelId, caseByNumber.case_number);
+      logAction('CASE_CHANNEL_REPAIRED', `${caseByNumber.case_number} kanal oppdatert til ${repairChannelId}`);
+      return getCaseByNumberStmt.get(caseByNumber.case_number);
+    }
+
+    return caseByNumber;
+  }
+
+  const lookupChannelIds = getInteractionCaseLookupChannelIds(interaction);
+  for (const channelId of lookupChannelIds) {
+    const caseByChannel = getCaseByChannelStmt.get(channelId);
+    if (caseByChannel) return caseByChannel;
+  }
+
+  const caseNumberFromTopic = extractCaseNumberFromInteractionChannelContext(interaction);
+  if (caseNumberFromTopic) {
+    const caseByTopic = getCaseByNumberStmt.get(caseNumberFromTopic);
+    if (caseByTopic) {
+      if (repairChannelId && caseByTopic.channel_id !== repairChannelId) {
+        updateCaseChannelStmt.run(repairChannelId, caseByTopic.case_number);
+        logAction('CASE_CHANNEL_REPAIRED', `${caseByTopic.case_number} kanal oppdatert via topic-oppslag til ${repairChannelId}`);
+      }
+      return getCaseByNumberStmt.get(caseByTopic.case_number);
+    }
+  }
+
+  logAction(
+    'CASE_LOOKUP_MISS',
+    `Fant ikke sak via kommando. command=${interaction.commandName || 'ukjent'} kanal=${interaction.channelId} guild=${interaction.guildId}`,
+  );
+  return null;
 }
 
 function extractCaseNumberFromLegacyMessage(interaction) {
