@@ -956,6 +956,46 @@ function resolveCaseFromInteraction(interaction) {
   return null;
 }
 
+async function resolveCaseFromInteractionWithFetch(interaction) {
+  const resolved = resolveCaseFromInteraction(interaction);
+  if (resolved) return resolved;
+
+  if (!interaction.guild || !interaction.channelId) return null;
+
+  const fetchedChannel = await interaction.guild.channels.fetch(interaction.channelId).catch(() => null);
+  if (!fetchedChannel) return null;
+
+  const isThread = fetchedChannel.isThread?.();
+  const repairChannelId = (isThread && fetchedChannel.parentId) ? fetchedChannel.parentId : fetchedChannel.id;
+
+  const lookupChannelIds = [fetchedChannel.id];
+  if (isThread && fetchedChannel.parentId) lookupChannelIds.push(fetchedChannel.parentId);
+
+  for (const channelId of lookupChannelIds) {
+    const caseByChannel = getCaseByChannelStmt.get(channelId);
+    if (caseByChannel) return caseByChannel;
+  }
+
+  const topicCandidates = [fetchedChannel.topic, fetchedChannel.parent?.topic];
+  for (const topic of topicCandidates) {
+    const match = String(topic || '').match(/Sak\s+([A-Z0-9\-]+)/i);
+    const topicCaseNumber = normalizeCaseNumber(match?.[1]);
+    if (!topicCaseNumber) continue;
+
+    const caseByTopic = getCaseByNumberStmt.get(topicCaseNumber);
+    if (!caseByTopic) continue;
+
+    if (repairChannelId && caseByTopic.channel_id !== repairChannelId) {
+      updateCaseChannelStmt.run(repairChannelId, caseByTopic.case_number);
+      logAction('CASE_CHANNEL_REPAIRED', `${caseByTopic.case_number} kanal oppdatert via fetched topic-oppslag til ${repairChannelId}`);
+    }
+
+    return getCaseByNumberStmt.get(caseByTopic.case_number);
+  }
+
+  return null;
+}
+
 function extractCaseNumberFromLegacyMessage(interaction) {
   const embeds = interaction.message?.embeds || [];
   for (const embed of embeds) {
@@ -2118,7 +2158,7 @@ async function handleStartCaseButton(interaction) {
 }
 
 async function handleAddMember(interaction) {
-  const caseData = resolveCaseFromInteraction(interaction);
+  const caseData = await resolveCaseFromInteractionWithFetch(interaction);
   if (!caseData) return safeReply(interaction, { content: 'Fant ingen sak for forespørselen.' });
 
   // Kun staff eller sakens oppretter kan legge til medlemmer.
@@ -2167,7 +2207,7 @@ async function handleRemoveMember(interaction) {
   if (!hasAnyStaffRole(interaction.member))
     return safeReply(interaction, { content: 'Kun staff kan fjerne medlemmer fra en sak.' });
 
-  const caseData = resolveCaseFromInteraction(interaction);
+  const caseData = await resolveCaseFromInteractionWithFetch(interaction);
   if (!caseData) return safeReply(interaction, { content: 'Fant ingen sak for forespørselen.' });
 
   const channel = getCaseChannel(interaction.guild, caseData);
