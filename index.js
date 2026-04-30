@@ -313,11 +313,16 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('legg_til_medlem')
-    .setDescription('Gi et medlem tilgang til sakskanalen')
+    .setDescription('Gi et medlem eller en rolle tilgang til sakskanalen')
     .addUserOption(option =>
       option.setName('bruker')
         .setDescription('Medlemmet som skal få tilgang')
-        .setRequired(true),
+        .setRequired(false),
+    )
+    .addRoleOption(option =>
+      option.setName('rolle')
+        .setDescription('Rollen som skal få tilgang')
+        .setRequired(false),
     )
     .addStringOption(option =>
       option.setName('saksnummer')
@@ -326,11 +331,16 @@ const COMMANDS = [
     ),
   new SlashCommandBuilder()
     .setName('fjern_fra_sak')
-    .setDescription('Fjern et medlems tilgang fra sakskanalen (kun staff)')
+    .setDescription('Fjern tilgang for et medlem eller en rolle fra sakskanalen (kun staff)')
     .addUserOption(option =>
       option.setName('bruker')
         .setDescription('Medlemmet som skal miste tilgang')
-        .setRequired(true),
+        .setRequired(false),
+    )
+    .addRoleOption(option =>
+      option.setName('rolle')
+        .setDescription('Rollen som skal miste tilgang')
+        .setRequired(false),
     )
     .addStringOption(option =>
       option.setName('saksnummer')
@@ -1453,6 +1463,55 @@ function buildActiveCasePermissionOverwrites(guild, creatorId) {
   return permissionOverwrites;
 }
 
+function getCaseParticipantPermissions() {
+  return {
+    [PermissionFlagsBits.ViewChannel]: true,
+    [PermissionFlagsBits.SendMessages]: true,
+    [PermissionFlagsBits.ReadMessageHistory]: true,
+  };
+}
+
+function resolveCaseAccessTarget(interaction) {
+  const targetMember = interaction.options.getMember('bruker');
+  const targetRole = interaction.options.getRole('rolle');
+
+  if (targetMember && targetRole) {
+    return { error: 'Velg enten en bruker eller en rolle, ikke begge deler.' };
+  }
+
+  if (!targetMember && !targetRole) {
+    return { error: 'Du må velge enten en bruker eller en rolle.' };
+  }
+
+  if (targetRole) {
+    if (targetRole.id === interaction.guild.roles.everyone.id) {
+      return { error: 'Kan ikke gi @everyone tilgang til en sak.' };
+    }
+
+    return {
+      kind: 'role',
+      entity: targetRole,
+      id: targetRole.id,
+      mention: `<@&${targetRole.id}>`,
+      label: `rollen ${targetRole.name}`,
+      eventLabel: `Rollen ${targetRole.name}`,
+    };
+  }
+
+  if (targetMember.id === client.user.id) {
+    return { error: 'Kan ikke legge til botten som deltaker.' };
+  }
+
+  return {
+    kind: 'member',
+    entity: targetMember,
+    id: targetMember.id,
+    mention: `<@${targetMember.id}>`,
+    label: targetMember.toString(),
+    eventLabel: targetMember.user.tag,
+  };
+}
+
 function buildArchivedCasePermissionOverwrites(guild) {
   const { dommer, admin, tingrett } = getConfiguredRoles(guild);
 
@@ -2207,39 +2266,43 @@ async function handleAddMember(interaction) {
   const channel = getCaseChannel(interaction.guild, caseData);
   if (!channel) return safeReply(interaction, { content: 'Fant ikke sakskanalen.' });
 
-  const targetMember = interaction.options.getMember('bruker');
-  if (!targetMember) return safeReply(interaction, { content: 'Fant ikke det valgte medlemmet i serveren.' });
-
-  // Ikke legg til botten selv.
-  if (targetMember.id === client.user.id)
-    return safeReply(interaction, { content: 'Kan ikke legge til botten som deltaker.' });
+  const target = resolveCaseAccessTarget(interaction);
+  if (target.error) return safeReply(interaction, { content: target.error });
 
   // Sjekk om personen allerede har tilgang.
-  const existing = channel.permissionOverwrites.cache.get(targetMember.id);
+  const existing = channel.permissionOverwrites.cache.get(target.id);
   if (existing?.allow.has(PermissionFlagsBits.ViewChannel))
-    return safeReply(interaction, { content: `${targetMember} har allerede tilgang til sakskanalen.` });
+    return safeReply(interaction, { content: `${target.label} har allerede tilgang til sakskanalen.` });
 
-  await channel.permissionOverwrites.edit(targetMember.id, {
-    [PermissionFlagsBits.ViewChannel]:        true,
-    [PermissionFlagsBits.SendMessages]:       true,
-    [PermissionFlagsBits.ReadMessageHistory]: true,
-  }, { reason: `Lagt til i sak ${caseData.case_number} av ${interaction.user.tag}` });
+  await channel.permissionOverwrites.edit(
+    target.id,
+    getCaseParticipantPermissions(),
+    { reason: `Lagt til i sak ${caseData.case_number} av ${interaction.user.tag}` },
+  );
+
+  const description = target.kind === 'role'
+    ? `${target.mention} har fått tilgang til saken av <@${interaction.user.id}>. Alle med rollen har nå tilgang.`
+    : `${target.mention} har fått tilgang til saken av <@${interaction.user.id}>.`;
 
   await channel.send({
     embeds: [
       new EmbedBuilder()
         .setColor(0x2ecc71)
         .setTitle('Nytt medlem lagt til')
-        .setDescription(`<@${targetMember.id}> har fått tilgang til saken av <@${interaction.user.id}>.`)
+        .setDescription(description)
         .setTimestamp(),
     ],
   });
 
   recordCaseEvent(caseData.case_number, 'MEMBER_ADDED', interaction.user,
-    `${targetMember.user.tag} ble lagt til i saken av ${interaction.user.tag}.`);
-  logAction('MEMBER_ADDED', `${targetMember.user.tag} lagt til i ${caseData.case_number}`);
+    `${target.eventLabel} ble lagt til i saken av ${interaction.user.tag}.`);
+  logAction('MEMBER_ADDED', `${target.eventLabel} lagt til i ${caseData.case_number}`);
 
-  await safeReply(interaction, { content: `✅ ${targetMember} har nå tilgang til sakskanalen.` });
+  if (target.kind === 'role') {
+    return safeReply(interaction, { content: `✅ ${target.mention} har nå tilgang til sakskanalen. Alle medlemmer med rollen får tilgang automatisk.` });
+  }
+
+  await safeReply(interaction, { content: `✅ ${target.label} har nå tilgang til sakskanalen.` });
 }
 
 async function handleRemoveMember(interaction) {
@@ -2252,38 +2315,56 @@ async function handleRemoveMember(interaction) {
   const channel = getCaseChannel(interaction.guild, caseData);
   if (!channel) return safeReply(interaction, { content: 'Fant ikke sakskanalen.' });
 
-  const targetMember = interaction.options.getMember('bruker');
-  if (!targetMember) return safeReply(interaction, { content: 'Fant ikke det valgte medlemmet i serveren.' });
+  const target = resolveCaseAccessTarget(interaction);
+  if (target.error) return safeReply(interaction, { content: target.error });
 
   // Ikke fjern sakens oppretter.
-  if (targetMember.id === caseData.creator_id)
+  if (target.kind === 'member' && target.id === caseData.creator_id)
     return safeReply(interaction, { content: 'Kan ikke fjerne sakens oppretter fra kanalen.' });
 
   // Ikke fjern botten eller staff-roller.
-  if (targetMember.id === client.user.id || hasAnyStaffRole(targetMember))
+  if (target.kind === 'member' && (target.id === client.user.id || hasAnyStaffRole(target.entity)))
     return safeReply(interaction, { content: 'Kan ikke fjerne staff eller botten fra sakskanalen.' });
 
-  const existing = channel.permissionOverwrites.cache.get(targetMember.id);
-  if (!existing) return safeReply(interaction, { content: `${targetMember} har ikke en individuell tilgangsoverstyring i sakskanalen.` });
+  if (target.kind === 'role' && [DOMMER_ROLE_NAME, SAKSBEHANDLER_ROLE_NAME, ADMIN_ROLE_NAME, TINGRETT_ROLE_NAME]
+    .some(roleName => roleName.toLowerCase() === target.entity.name.toLowerCase())) {
+    return safeReply(interaction, { content: 'Kan ikke fjerne en konfigurert staff-rolle fra sakskanalen.' });
+  }
 
-  await channel.permissionOverwrites.delete(targetMember.id,
+  const existing = channel.permissionOverwrites.cache.get(target.id);
+  if (!existing) {
+    const missingMessage = target.kind === 'role'
+      ? `${target.mention} har ikke en egen tilgangsoverstyring i sakskanalen.`
+      : `${target.label} har ikke en individuell tilgangsoverstyring i sakskanalen.`;
+    return safeReply(interaction, { content: missingMessage });
+  }
+
+  await channel.permissionOverwrites.delete(target.id,
     `Fjernet fra sak ${caseData.case_number} av ${interaction.user.tag}`);
+
+  const description = target.kind === 'role'
+    ? `${target.mention} har mistet tilgang til saken av <@${interaction.user.id}>. Medlemmer med rollen mister også tilgangen.`
+    : `${target.mention} har mistet tilgang til saken av <@${interaction.user.id}>.`;
 
   await channel.send({
     embeds: [
       new EmbedBuilder()
         .setColor(0xe74c3c)
         .setTitle('Medlem fjernet')
-        .setDescription(`<@${targetMember.id}> har mistet tilgang til saken av <@${interaction.user.id}>.`)
+        .setDescription(description)
         .setTimestamp(),
     ],
   });
 
   recordCaseEvent(caseData.case_number, 'MEMBER_REMOVED', interaction.user,
-    `${targetMember.user.tag} ble fjernet fra saken av ${interaction.user.tag}.`);
-  logAction('MEMBER_REMOVED', `${targetMember.user.tag} fjernet fra ${caseData.case_number}`);
+    `${target.eventLabel} ble fjernet fra saken av ${interaction.user.tag}.`);
+  logAction('MEMBER_REMOVED', `${target.eventLabel} fjernet fra ${caseData.case_number}`);
 
-  await safeReply(interaction, { content: `✅ ${targetMember} har ikke lenger tilgang til sakskanalen.` });
+  if (target.kind === 'role') {
+    return safeReply(interaction, { content: `✅ ${target.mention} har ikke lenger tilgang til sakskanalen.` });
+  }
+
+  await safeReply(interaction, { content: `✅ ${target.label} har ikke lenger tilgang til sakskanalen.` });
 }
 
 
