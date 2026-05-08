@@ -425,6 +425,32 @@ const COMMANDS = [
   new SlashCommandBuilder()
     .setName('sendmelding')
     .setDescription('Åpner skriveboks for å sende en melding som botten (kun admin)'),
+  new SlashCommandBuilder()
+    .setName('gi_rolle')
+    .setDescription('Gi en rolle til et medlem (kun admin)')
+    .addUserOption(option =>
+      option.setName('bruker')
+        .setDescription('Brukeren som skal få rollen')
+        .setRequired(true),
+    )
+    .addRoleOption(option =>
+      option.setName('rolle')
+        .setDescription('Rollen som skal gis')
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('fjern_rolle')
+    .setDescription('Fjern en rolle fra et medlem (kun admin)')
+    .addUserOption(option =>
+      option.setName('bruker')
+        .setDescription('Brukeren som skal miste rollen')
+        .setRequired(true),
+    )
+    .addRoleOption(option =>
+      option.setName('rolle')
+        .setDescription('Rollen som skal fjernes')
+        .setRequired(true),
+    ),
 ].map(command => command.toJSON());
 
 // ---------------------------------------------------------------------------
@@ -2469,6 +2495,63 @@ async function handleArchiveCase(interaction, caseNumber) {
 }
 
 // ---------------------------------------------------------------------------
+// Rolle-kommandoer
+// ---------------------------------------------------------------------------
+async function handleGiRolle(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Du har ikke tilgang til denne kommandoen.' });
+
+  const targetUser = interaction.options.getUser('bruker');
+  const role = interaction.options.getRole('rolle');
+
+  let member;
+  try {
+    member = await interaction.guild.members.fetch(targetUser.id);
+  } catch {
+    return safeReply(interaction, { content: `Fant ikke brukeren ${targetUser.tag} i serveren.` });
+  }
+
+  if (member.roles.cache.has(role.id))
+    return safeReply(interaction, { content: `${targetUser.tag} har allerede rollen **${role.name}**.` });
+
+  try {
+    await member.roles.add(role);
+    logAction('GI_ROLLE', `${interaction.user.tag} ga rollen "${role.name}" til ${targetUser.tag}`);
+    return safeReply(interaction, { content: `✅ Rollen **${role.name}** ble gitt til ${targetUser.tag}.` });
+  } catch (err) {
+    console.error('[GI_ROLLE]', err);
+    return safeReply(interaction, { content: `Klarte ikke å gi rollen. Sjekk at botten har nødvendige tillatelser og at rollen er lavere enn bottens rolle.` });
+  }
+}
+
+async function handleFjernRolle(interaction) {
+  if (!hasGuildAdminAccess(interaction))
+    return safeReply(interaction, { content: 'Du har ikke tilgang til denne kommandoen.' });
+
+  const targetUser = interaction.options.getUser('bruker');
+  const role = interaction.options.getRole('rolle');
+
+  let member;
+  try {
+    member = await interaction.guild.members.fetch(targetUser.id);
+  } catch {
+    return safeReply(interaction, { content: `Fant ikke brukeren ${targetUser.tag} i serveren.` });
+  }
+
+  if (!member.roles.cache.has(role.id))
+    return safeReply(interaction, { content: `${targetUser.tag} har ikke rollen **${role.name}**.` });
+
+  try {
+    await member.roles.remove(role);
+    logAction('FJERN_ROLLE', `${interaction.user.tag} fjernet rollen "${role.name}" fra ${targetUser.tag}`);
+    return safeReply(interaction, { content: `✅ Rollen **${role.name}** ble fjernet fra ${targetUser.tag}.` });
+  } catch (err) {
+    console.error('[FJERN_ROLLE]', err);
+    return safeReply(interaction, { content: `Klarte ikke å fjerne rollen. Sjekk at botten har nødvendige tillatelser og at rollen er lavere enn bottens rolle.` });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Discord-hendelser
 // ---------------------------------------------------------------------------
 client.once(Events.ClientReady, async readyClient => {
@@ -2515,6 +2598,8 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'slett_arkiv')     return handleDeleteArchiveCommand(interaction);
       if (interaction.commandName === 'send_melding' || interaction.commandName === 'sendmelding')
         return handleSendMelding(interaction);
+      if (interaction.commandName === 'gi_rolle')     return handleGiRolle(interaction);
+      if (interaction.commandName === 'fjern_rolle')  return handleFjernRolle(interaction);
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'new_case_type_select')
