@@ -2054,8 +2054,8 @@ async function handleSetPriorityCommand(interaction) {
 }
 
 async function handleSetCourtTimeCommand(interaction) {
-  if (!isJudge(interaction.member)) {
-    return safeReply(interaction, { content: 'Kun dommere kan bruke denne kommandoen.' });
+  if (!isJudge(interaction.member) && !isAdmin(interaction.member)) {
+    return safeReply(interaction, { content: 'Kun dommere og admin kan bruke denne kommandoen.' });
   }
 
   const datoOgTid = interaction.options.getString('dato_og_tid', true).trim();
