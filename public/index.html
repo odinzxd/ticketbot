@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ticket Import</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --card: #151c33;
+      --muted: #93a1c6;
+      --text: #e7ecff;
+      --accent: #6ea8fe;
+      --ok: #2dc26b;
+      --err: #ff6b6b;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(circle at top, #1a2450, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 980px;
+      margin: 0 auto;
+      display: grid;
+      gap: 1rem;
+    }
+    .card {
+      background: color-mix(in oklab, var(--card), black 10%);
+      border: 1px solid #2b3965;
+      border-radius: 14px;
+      padding: 1rem;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+    }
+    h1, h2 { margin: 0 0 .75rem; }
+    p { color: var(--muted); }
+    .row {
+      display: flex;
+      gap: .75rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input, button, select {
+      border-radius: 10px;
+      border: 1px solid #38508f;
+      background: #0d1430;
+      color: var(--text);
+      padding: .6rem .75rem;
+    }
+    button {
+      background: linear-gradient(180deg, #4f8efc, #3f7ef5);
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: .55rem;
+      border-bottom: 1px solid #2b3965;
+      vertical-align: top;
+    }
+    th { color: #cdd9ff; }
+    code {
+      font-size: .8rem;
+      color: #b3c6ff;
+      background: #0b122d;
+      border: 1px solid #2b3965;
+      border-radius: 6px;
+      padding: .1rem .35rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Importer tickets</h1>
+      <p>Last opp CSV/JSON og få ticketene lagret i databasen. Obligatorisk felt: <code>title</code>.</p>
+      <div class="row">
+        <input id="file" type="file" accept=".csv,.json" />
+        <button id="uploadBtn">Importer fil</button>
+      </div>
+      <p id="uploadStatus" class="status"></p>
+      <p>Eksempel-kolonner: <code>external_id,title,description,customer_email,status,priority</code></p>
+    </div>
+
+    <div class="card">
+      <h2>Tickets</h2>
+      <div class="row">
+        <select id="statusFilter">
+          <option value="">Alle statuser</option>
+          <option value="open">open</option>
+          <option value="pending">pending</option>
+          <option value="closed">closed</option>
+        </select>
+        <input id="search" type="text" placeholder="Søk i tittel, e-post, beskrivelse" />
+        <button id="reloadBtn">Last inn</button>
+      </div>
+      <div style="overflow:auto; margin-top:.75rem;">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Tittel</th>
+              <th>Status</th>
+              <th>Prioritet</th>
+              <th>E-post</th>
+              <th>Importert</th>
+            </tr>
+          </thead>
+          <tbody id="ticketRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const ticketRows = document.getElementById('ticketRows');
+    const statusFilter = document.getElementById('statusFilter');
+    const searchInput = document.getElementById('search');
+    const reloadBtn = document.getElementById('reloadBtn');
+
+    function setStatus(message, ok = true) {
+      uploadStatus.textContent = message;
+      uploadStatus.className = 'status ' + (ok ? 'ok' : 'err');
+    }
+
+    async function importFile() {
+      const file = fileInput.files[0];
+      if (!file) {
+        setStatus('Velg en fil først.', false);
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      setStatus('Importerer...');
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/api/tickets/import', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Import feilet');
+        }
+
+        setStatus(`Import ferdig. Jobb: ${data.jobId}. Importert: ${data.importedRows}, Feilet: ${data.failedRows}`);
+        await loadTickets();
+      } catch (error) {
+        setStatus(String(error.message || error), false);
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    }
+
+    async function loadTickets() {
+      const status = statusFilter.value;
+      const search = searchInput.value.trim();
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (search) params.set('search', search);
+      params.set('limit', '100');
+
+      const response = await fetch('/api/tickets?' + params.toString());
+      const data = await response.json();
+
+      ticketRows.innerHTML = '';
+      for (const ticket of data.tickets || []) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${ticket.external_id || ticket.id}</td>
+          <td>${escapeHtml(ticket.title || '')}</td>
+          <td>${ticket.status}</td>
+          <td>${ticket.priority}</td>
+          <td>${escapeHtml(ticket.customer_email || '')}</td>
+          <td>${new Date(ticket.imported_at).toLocaleString('no-NO')}</td>
+        `;
+        ticketRows.appendChild(tr);
+      }
+
+      if ((data.tickets || []).length === 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="6" style="color:#93a1c6;">Ingen tickets funnet.</td>';
+        ticketRows.appendChild(tr);
+      }
+    }
+
+    function escapeHtml(input) {
+      return String(input)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    uploadBtn.addEventListener('click', importFile);
+    reloadBtn.addEventListener('click', loadTickets);
+
+    loadTickets().catch((e) => setStatus('Klarte ikke laste tickets: ' + e.message, false));
+  </script>
+</body>
+</html>

@@ -381,6 +381,38 @@ const COMMANDS = [
         .setRequired(false),
     ),
   new SlashCommandBuilder()
+    .setName('sett_rettstid')
+    .setDescription('Sett rettstid og send en blokk i valgt kanal (kun dommere)')
+    .addStringOption(option =>
+      option.setName('dato')
+        .setDescription('Dato (fri tekst, f.eks. 12.05.2026)')
+        .setRequired(true)
+        .setMaxLength(100),
+    )
+    .addStringOption(option =>
+      option.setName('tidspunkt')
+        .setDescription('Tidspunkt (fri tekst, f.eks. 14:30)')
+        .setRequired(true)
+        .setMaxLength(100),
+    )
+    .addChannelOption(option =>
+      option.setName('kanal')
+        .setDescription('Kanalen der rettstiden skal publiseres')
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+        .setRequired(true),
+    )
+    .addStringOption(option =>
+      option.setName('saksnummer')
+        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende sakskanal hvis mulig.')
+        .setRequired(false),
+    )
+    .addStringOption(option =>
+      option.setName('merknad')
+        .setDescription('Valgfri merknad i samme blokk')
+        .setRequired(false)
+        .setMaxLength(1000),
+    ),
+  new SlashCommandBuilder()
     .setName('legg_til_vitne')
     .setDescription('Legg til vitne med navn og forklaring på en sak')
     .addStringOption(option =>
@@ -2038,6 +2070,71 @@ async function handleSetPriorityCommand(interaction) {
   await safeReply(interaction, { content: `✅ Prioritet oppdatert til ${newPriority}.` });
 }
 
+async function handleSetCourtTimeCommand(interaction) {
+  if (!isJudge(interaction.member)) {
+    return safeReply(interaction, { content: 'Kun dommere kan bruke denne kommandoen.' });
+  }
+
+  const dato = interaction.options.getString('dato', true).trim();
+  const tidspunkt = interaction.options.getString('tidspunkt', true).trim();
+  const merknad = (interaction.options.getString('merknad') || '').trim();
+  const targetChannel = interaction.options.getChannel('kanal', true);
+
+  if (!targetChannel?.isTextBased?.()) {
+    return safeReply(interaction, { content: 'Velg en gyldig tekstkanal.' });
+  }
+
+  let caseData = null;
+  const providedCaseNumber = normalizeCaseNumber(interaction.options.getString('saksnummer'));
+
+  if (providedCaseNumber) {
+    caseData = getCaseByNumberStmt.get(providedCaseNumber) || null;
+    if (!caseData) {
+      return safeReply(interaction, { content: `Fant ikke sak med saksnummer ${providedCaseNumber}.` });
+    }
+  } else {
+    caseData = resolveCaseFromInteraction(interaction);
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x1f8b4c)
+    .setTitle('📅 Rettstid satt')
+    .setDescription(caseData
+      ? `Rettstid er satt for saken **${caseData.case_number}**.`
+      : 'Rettstid er satt.')
+    .addFields(
+      { name: 'Dato', value: truncate(dato, 1024), inline: true },
+      { name: 'Tidspunkt', value: truncate(tidspunkt, 1024), inline: true },
+      { name: 'Satt av', value: `<@${interaction.user.id}>`, inline: true },
+    )
+    .setTimestamp();
+
+  if (caseData) {
+    embed.addFields({ name: 'Saksnummer', value: caseData.case_number, inline: true });
+  }
+
+  if (merknad) {
+    embed.addFields({ name: 'Merknad', value: truncate(merknad, 1024), inline: false });
+  }
+
+  await targetChannel.send({ embeds: [embed] });
+
+  if (caseData) {
+    recordCaseEvent(
+      caseData.case_number,
+      'COURT_TIME_SET',
+      interaction.user,
+      `Rettstid satt til ${dato} kl. ${tidspunkt}. Publisert i kanal ${targetChannel.id}.${merknad ? ` Merknad: ${truncate(merknad, 180)}` : ''}`,
+    );
+  }
+
+  return safeReply(interaction, {
+    content: caseData
+      ? `✅ Rettstid for ${caseData.case_number} ble sendt i ${targetChannel}.`
+      : `✅ Rettstid ble sendt i ${targetChannel}.`,
+  });
+}
+
 function resolveStatusFromButtonCode(statusCode) {
   if (statusCode === 'open') return 'Åpen';
   if (statusCode === 'processing') return 'Under behandling';
@@ -2594,6 +2691,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'fjern_fra_sak')   return handleRemoveMember(interaction);
       if (interaction.commandName === 'sett_status')     return handleSetStatusCommand(interaction);
       if (interaction.commandName === 'sett_prioritet')  return handleSetPriorityCommand(interaction);
+      if (interaction.commandName === 'sett_rettstid')   return handleSetCourtTimeCommand(interaction);
       if (interaction.commandName === 'legg_til_vitne')  return handleAddWitnessCommand(interaction);
       if (interaction.commandName === 'slett_arkiv')     return handleDeleteArchiveCommand(interaction);
       if (interaction.commandName === 'send_melding' || interaction.commandName === 'sendmelding')
