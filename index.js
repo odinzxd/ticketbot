@@ -2068,7 +2068,7 @@ async function handleSetCourtTimeCommand(interaction) {
   const embed = new EmbedBuilder()
     .setColor(0x1f8b4c)
     .setTitle('📅 Rettstid satt')
-    .setDescription('Rettstid er satt for rettsm øtet.')
+    .setDescription('Tider for ledige rettsmøter. Opprett ticket for å claime.')
     .addFields(
       { name: 'Dato og tidspunkt', value: truncate(datoOgTid, 1024), inline: false },
       { name: 'Satt av', value: `<@${interaction.user.id}>`, inline: true },
