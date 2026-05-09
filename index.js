@@ -384,33 +384,16 @@ const COMMANDS = [
     .setName('sett_rettstid')
     .setDescription('Sett rettstid og send en blokk i valgt kanal (kun dommere)')
     .addStringOption(option =>
-      option.setName('dato')
-        .setDescription('Dato (fri tekst, f.eks. 12.05.2026)')
+      option.setName('dato_og_tid')
+        .setDescription('Dato og tidspunkt (f.eks. 12.05.2026 14:30)')
         .setRequired(true)
-        .setMaxLength(100),
-    )
-    .addStringOption(option =>
-      option.setName('tidspunkt')
-        .setDescription('Tidspunkt (fri tekst, f.eks. 14:30)')
-        .setRequired(true)
-        .setMaxLength(100),
+        .setMaxLength(200),
     )
     .addChannelOption(option =>
       option.setName('kanal')
         .setDescription('Kanalen der rettstiden skal publiseres')
         .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
         .setRequired(true),
-    )
-    .addStringOption(option =>
-      option.setName('saksnummer')
-        .setDescription('Valgfritt saksnummer. Lar du den stå tom brukes gjeldende sakskanal hvis mulig.')
-        .setRequired(false),
-    )
-    .addStringOption(option =>
-      option.setName('merknad')
-        .setDescription('Valgfri merknad i samme blokk')
-        .setRequired(false)
-        .setMaxLength(1000),
     ),
   new SlashCommandBuilder()
     .setName('legg_til_vitne')
@@ -2075,63 +2058,27 @@ async function handleSetCourtTimeCommand(interaction) {
     return safeReply(interaction, { content: 'Kun dommere kan bruke denne kommandoen.' });
   }
 
-  const dato = interaction.options.getString('dato', true).trim();
-  const tidspunkt = interaction.options.getString('tidspunkt', true).trim();
-  const merknad = (interaction.options.getString('merknad') || '').trim();
+  const datoOgTid = interaction.options.getString('dato_og_tid', true).trim();
   const targetChannel = interaction.options.getChannel('kanal', true);
 
   if (!targetChannel?.isTextBased?.()) {
     return safeReply(interaction, { content: 'Velg en gyldig tekstkanal.' });
   }
 
-  let caseData = null;
-  const providedCaseNumber = normalizeCaseNumber(interaction.options.getString('saksnummer'));
-
-  if (providedCaseNumber) {
-    caseData = getCaseByNumberStmt.get(providedCaseNumber) || null;
-    if (!caseData) {
-      return safeReply(interaction, { content: `Fant ikke sak med saksnummer ${providedCaseNumber}.` });
-    }
-  } else {
-    caseData = resolveCaseFromInteraction(interaction);
-  }
-
   const embed = new EmbedBuilder()
     .setColor(0x1f8b4c)
     .setTitle('📅 Rettstid satt')
-    .setDescription(caseData
-      ? `Rettstid er satt for saken **${caseData.case_number}**.`
-      : 'Rettstid er satt.')
+    .setDescription('Rettstid er satt for rettsm øtet.')
     .addFields(
-      { name: 'Dato', value: truncate(dato, 1024), inline: true },
-      { name: 'Tidspunkt', value: truncate(tidspunkt, 1024), inline: true },
+      { name: 'Dato og tidspunkt', value: truncate(datoOgTid, 1024), inline: false },
       { name: 'Satt av', value: `<@${interaction.user.id}>`, inline: true },
     )
     .setTimestamp();
 
-  if (caseData) {
-    embed.addFields({ name: 'Saksnummer', value: caseData.case_number, inline: true });
-  }
-
-  if (merknad) {
-    embed.addFields({ name: 'Merknad', value: truncate(merknad, 1024), inline: false });
-  }
-
   await targetChannel.send({ embeds: [embed] });
 
-  if (caseData) {
-    recordCaseEvent(
-      caseData.case_number,
-      'COURT_TIME_SET',
-      interaction.user,
-      `Rettstid satt til ${dato} kl. ${tidspunkt}. Publisert i kanal ${targetChannel.id}.${merknad ? ` Merknad: ${truncate(merknad, 180)}` : ''}`,
-    );
-  }
-
   return safeReply(interaction, {
-    content: caseData
-      ? `✅ Rettstid for ${caseData.case_number} ble sendt i ${targetChannel}.`
-      : `✅ Rettstid ble sendt i ${targetChannel}.`,
+    content: `✅ Rettstid ble sendt i ${targetChannel}.`,
   });
 }
 
