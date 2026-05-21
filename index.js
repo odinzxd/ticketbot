@@ -1665,11 +1665,26 @@ async function moveCaseToArchive(channel, caseData, actor) {
   archiveCaseStmt.run('Arkivert', caseData.case_number);
 
   const updatedCase = getCaseByNumberStmt.get(caseData.case_number);
-  await refreshCaseMessage(channel, updatedCase);
-  await channel.send({
-    embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle('Sak arkivert')
-      .setDescription(`Saken ${caseData.case_number} er flyttet til arkiv av ${actor.tag}.`).setTimestamp()],
-  });
+  try {
+    await refreshCaseMessage(channel, updatedCase);
+  } catch (error) {
+    logAction(
+      'CASE_ARCHIVE_MESSAGE_REFRESH_SKIPPED',
+      `${caseData.case_number} kunne ikke oppdatere saksmelding (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+    );
+  }
+
+  try {
+    await channel.send({
+      embeds: [new EmbedBuilder().setColor(0x95a5a6).setTitle('Sak arkivert')
+        .setDescription(`Saken ${caseData.case_number} er flyttet til arkiv av ${actor.tag}.`).setTimestamp()],
+    });
+  } catch (error) {
+    logAction(
+      'CASE_ARCHIVE_NOTICE_SKIPPED',
+      `${caseData.case_number} kunne ikke sende arkivmelding (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+    );
+  }
 
   recordCaseEvent(caseData.case_number, 'ARCHIVED', actor, `Saken ble arkivert av ${actor.tag}.`);
   logAction('CASE_ARCHIVED', `${caseData.case_number} arkivert av ${actor.tag}`);
@@ -1879,13 +1894,24 @@ async function handleMoveArchiveCommand(interaction) {
   const caseData = resolveCaseFromInteraction(interaction);
   if (!caseData) return safeReply(interaction, { content: 'Fant ingen sak å flytte til arkiv.' });
   if (!canManageCase(interaction.member, caseData)) return safeReply(interaction, { content: 'Du kan ikke arkivere denne saken.' });
+  if (caseData.status === 'Arkivert') return safeReply(interaction, { content: 'Saken er allerede arkivert.' });
 
   const channel = interaction.guild.channels.cache.get(caseData.channel_id);
   if (!channel) return safeReply(interaction, { content: 'Fant ikke sakskanalen for denne saken.' });
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  await moveCaseToArchive(channel, caseData, interaction.user);
-  await interaction.editReply({ content: `Saken ${caseData.case_number} er flyttet til arkiv.` });
+  try {
+    await moveCaseToArchive(channel, caseData, interaction.user);
+    await interaction.editReply({ content: `Saken ${caseData.case_number} er flyttet til arkiv.` });
+  } catch (error) {
+    logAction(
+      'CASE_ARCHIVE_FAILED',
+      `${caseData.case_number} kunne ikke arkiveres av ${interaction.user.tag} (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+    );
+    await interaction.editReply({
+      content: 'Klarte ikke å arkivere saken. Sjekk at botten kan administrere kanaler og at arkivkategorien ikke er full.',
+    });
+  }
 }
 
 async function handleDeleteArchiveCommand(interaction) {
@@ -2534,8 +2560,23 @@ async function handleArchiveCase(interaction, caseNumber) {
   const caseData = resolveCaseFromButtonInteraction(interaction, caseNumber);
   if (!caseData) return safeReply(interaction, { content: 'Saken ble ikke funnet.' });
   if (!canManageCase(interaction.member, caseData)) return safeReply(interaction, { content: 'Du har ikke tilgang til å arkivere denne saken.' });
-  await moveCaseToArchive(interaction.channel, caseData, interaction.user);
-  await interaction.reply({ content: `Saken ${caseData.case_number} er arkivert.` });
+  if (caseData.status === 'Arkivert') return safeReply(interaction, { content: 'Saken er allerede arkivert.' });
+
+  const channel = getCaseChannel(interaction.guild, caseData) || interaction.channel;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    await moveCaseToArchive(channel, caseData, interaction.user);
+    await interaction.editReply({ content: `Saken ${caseData.case_number} er arkivert.` });
+  } catch (error) {
+    logAction(
+      'CASE_ARCHIVE_FAILED',
+      `${caseData.case_number} kunne ikke arkiveres via knapp av ${interaction.user.tag} (${error?.code || 'ukjent kode'}: ${error?.message || 'ukjent feil'})`,
+    );
+    await interaction.editReply({
+      content: 'Klarte ikke å arkivere saken. Sjekk at botten kan administrere kanaler og at arkivkategorien ikke er full.',
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
