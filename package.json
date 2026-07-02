@@ -9,7 +9,7 @@
     "start:web": "node tickets-server.js"
   },
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=20 <26"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
